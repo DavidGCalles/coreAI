@@ -3,8 +3,8 @@
 ### Story 1.1: Entorno de Ejecución con Separación de Responsabilidades
 **Como** arquitecto de sistemas, **quiero** desplegar CoreAI con motores especializados, **para** que cada servicio gestione su dominio de datos (relacional vs vectorial) de forma aislada.
 **Criterios de Aceptación (DoD):**
-- [ ] Docker Compose levanta Postgres, Qdrant e Infinity.
-- [ ] Qdrant es accesible vía API y tiene persistencia configurada en disco local.
+- [V] Docker Compose levanta Postgres, Qdrant e Infinity.
+- [V] Qdrant es accesible vía API y tiene persistencia configurada en disco local.
 
 ### Story 1.2: Definición del Esquema Estructurado (Postgres)
 **Como** sistema CoreAI, **quiero** usar Postgres exclusivamente para datos deterministas y estados de tareas, **para** garantizar la integridad referencial del sistema.
@@ -36,5 +36,5 @@
 ### Story 3.2: Herramienta MCP de Búsqueda (Qdrant Search)
 **Como** modelo de lenguaje, **quiero** buscar información mediante la Tool MCP, **para** obtener resultados basados en la relevancia semántica de Qdrant.
 **Criterios de Aceptación (DoD):**
-- [ ] La Tool `search_coreai` realiza una búsqueda `vector_search` sobre Qdrant.
+- [V] La Tool `search_coreai` realiza una búsqueda `vector_search` sobre Qdrant.
 - [ ] Se aplican filtros de payload en Qdrant (usando la metadata de Postgres) si la consulta lo requiere.
