@@ -1,0 +1,32 @@
+FROM michaelf34/infinity:latest-cpu
+
+RUN pip install --no-cache-dir sentencepiece protobuf "transformers>=4.33.0" "tokenizers>=0.13.3"
+
+# 1. Configuración de Directorios
+WORKDIR /app
+
+# 2. Copiamos el modelo "sanitizado" desde el contexto de build.
+# cloudbuild.yaml se encarga de descargarlo desde GCS.
+COPY models/e5-small-sanitized /data/model
+
+# 2.b. Copiamos el modelo NLI hidratado.
+COPY models/nli-model /data/nli_model
+
+# 3. Permisos
+RUN chmod -R 777 /data/model /data/nli_model
+
+# 4. MODO OFFLINE - Evita que el contenedor intente conectar a HuggingFace
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
+
+# 5. FORZAMOS LA CONFIGURACIÓN VÍA ENV (Ignora el CMD frágil)
+#ENV INFINITY_MODEL_ID=/data/model
+ENV INFINITY_ENGINE=torch
+ENV INFINITY_PORT=8080
+ENV INFINITY_HOST=0.0.0.0
+
+EXPOSE 8080
+
+
+# 6. Arranque con API Key Obligatoria
+ENTRYPOINT ["infinity_emb"]

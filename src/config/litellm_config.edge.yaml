@@ -1,0 +1,37 @@
+model_list:
+  # ==========================================================
+  # POOL 5: EMBEDDINGS
+  # ==========================================================
+
+  - model_name: text-embedding
+    litellm_params:
+      model: data/model
+      custom_llm_provider: openai
+      api_base: os.environ/EMBEDDING_API_BASE
+      api_key: "infinity-service"
+      rpm: 1000
+      tpm: 1000000
+
+  # ==========================================================
+  # Local LLM 
+  # ==========================================================
+  - model_name: local-fallback
+    litellm_params:
+      # 'openai/' tells LiteLLM to use the generic OpenAI format
+      model: openai/local-model 
+      # Points to the host machine from inside the container
+      api_base: "http://host.docker.internal:1234/v1"
+      api_key: "lm-studio"
+      tpm: 1000000
+      rpm: 1000
+
+router_settings:
+  fallbacks:
+    - "crewai-proxy": ["local-fallback"]
+    - "router-model": ["local-fallback"]
+    - "vision-model": ["local-fallback"]
+    - "audio-model": ["local-fallback"]
+    - "text-embedding": ["data/model"]
+  
+  allowed_fails: 1
+  cooldown_time: 1 
