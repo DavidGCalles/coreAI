@@ -24,8 +24,8 @@ class MemoryMetadata(BaseModel):
         description="Pares clave-valor arbitrarios para filtrado por payload en Qdrant."
     )
     source_id: str | None = Field(None, description="Identificador del origen (hash, URI, ID externo).")
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 class CoreMemoryNode(BaseModel):
     """Representación atómica de un vector a persistir en Qdrant."""
