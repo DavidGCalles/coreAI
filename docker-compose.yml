@@ -4,6 +4,8 @@ services:
     image: pgvector/pgvector:pg15
     container_name: coreai_postgres
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-coreai_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -27,6 +29,8 @@ services:
       - "6334:6334"  # gRPC Port (internal)
     volumes:
       - ./data/qdrant:/qdrant/storage
+    env_file:
+      - .env
     environment:
       - QDRANT__TELEMETRY_DISABLED=true
     restart: always
@@ -41,6 +45,8 @@ services:
       - ./src/config/litellm_config.edge.yaml:/app/config.yaml
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    env_file:
+      - .env
     environment:
       - HF_HUB_OFFLINE=1
       - TRANSFORMERS_OFFLINE=1
@@ -56,6 +62,8 @@ services:
       - "7997:8080"
     volumes:
       - ./data/infinity:/models
+    env_file:
+      - .env
     command: ["--model-id", "/data/model", "--model-id", "/data/nli_model"]
     restart: unless-stopped
 
@@ -87,3 +95,4 @@ services:
         condition: service_started
     # Sobrescribimos el comando para forzar el hot-reload en local
     command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+

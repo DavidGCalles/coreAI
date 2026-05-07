@@ -20,7 +20,7 @@ model_list:
       # 'openai/' tells LiteLLM to use the generic OpenAI format
       model: openai/local-model 
       # Points to the host machine from inside the container
-      api_base: "http://host.docker.internal:1234/v1"
+      api_base: os.environ/LOCAL_LLM_API_BASE #"http://host.docker.internal:1234/v1 for local lmstudio instances"
       api_key: "lm-studio"
       tpm: 1000000
       rpm: 1000
