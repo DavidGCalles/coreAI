@@ -39,8 +39,8 @@ class VectorMemoryManager:
                 url = host if "://" in host else f"http://{host}:6333"
                 self._client = AsyncQdrantClient(url=url)
         except Exception as e:
-            logger.error(f"Fallo crítico al conectar con Qdrant: {e}", exc_info=True)
-            raise ConnectionError(f"Fallo crítico al conectar con Qdrant: {e}")
+            logger.error("Fallo crítico al conectar con Qdrant: %s", e, exc_info=True)
+            raise ConnectionError("Fallo crítico al conectar con Qdrant: %s", e)
 
         await self._ensure_all_collections()
 
@@ -48,7 +48,7 @@ class VectorMemoryManager:
         try:
             await self._client.get_collection(collection_name=collection_name)
         except Exception:
-            logger.info(f"Colección '{collection_name}' no encontrada. Inicializando...")
+            logger.info("Colección '%s' no encontrada. Inicializando...", collection_name)
             await self._client.create_collection(
                 collection_name=collection_name,
                 vectors_config=models.VectorParams(
@@ -69,7 +69,7 @@ class VectorMemoryManager:
                     wait=False,
                 )
             except Exception as e:
-                logger.debug(f"Índice ya existente o error menor en '{field}': {e}")
+                logger.debug("Índice ya existente o error menor en '%s': %s", field, e)
 
     async def _ensure_all_collections(self) -> None:
         for coll in self._collections:
@@ -152,10 +152,10 @@ class VectorMemoryManager:
                 ],
                 wait=True,
             )
-            logger.info(f"Nodo {node.id} insertado en {collection} para tenant {node.tenant_id}")
+            logger.info("Nodo %s insertado en %s para tenant %s", node.id, collection, node.tenant_id)
             return str(node.id)
         except Exception as e:
-            logger.error(f"Fallo al insertar nodo {node.id}: {e}", exc_info=True)
+            logger.error("Fallo al insertar nodo %s: %s", node.id, e, exc_info=True)
             raise
 
     async def search_memory(self, query: str, filters: MemorySearchFilters) -> list[CoreMemoryNode]:
@@ -179,7 +179,7 @@ class VectorMemoryManager:
                     score_threshold=filters.score_threshold
                 )
             except Exception as e:
-                logger.warning(f"Error buscando en {collection_name}: {e}")
+                logger.warning("Error buscando en %s: %s", collection_name, e)
                 return []
 
         # Búsqueda concurrente si hay múltiples colecciones
@@ -195,7 +195,7 @@ class VectorMemoryManager:
             try:
                 parsed_nodes.append(CoreMemoryNode.model_validate(point.payload))
             except Exception as e:
-                logger.error(f"Integridad comprometida en nodo {point.id}: {e}")
+                logger.error("Integridad comprometida en nodo %s: %s", point.id, e)
                 continue
 
         return parsed_nodes
@@ -214,4 +214,4 @@ class VectorMemoryManager:
                     points_selector=models.PointIdsList(points=[str(memory_id)]),
                 )
             except Exception as e:
-                logger.error(f"Error borrando {memory_id} de {collection}: {e}", exc_info=True)
+                logger.error("Error borrando %s de %s: %s", memory_id, collection, e, exc_info=True)
