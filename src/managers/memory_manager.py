@@ -215,3 +215,20 @@ class VectorMemoryManager:
                 )
             except Exception as e:
                 logger.error("Error borrando %s de %s: %s", memory_id, collection, e, exc_info=True)
+                
+    async def get_collection_info(self, collection_name: str) -> dict:
+        """Obtiene estadísticas reales de la colección en Qdrant."""
+        await self._initialize_client()
+        try:
+            collection_info = await self._client.get_collection(collection_name=collection_name)
+            return {
+                "status": collection_info.status,
+                "vectors_count": collection_info.vectors_count,
+                "config": {
+                    "vector_size": collection_info.config.params.vectors.size,
+                    "distance": collection_info.config.params.vectors.distance.value
+                }
+            }
+        except Exception as e:
+            logger.error(f"Error al obtener info de {collection_name}: {e}")
+            return {"error": str(e)}

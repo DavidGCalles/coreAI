@@ -3,6 +3,9 @@ from mcp.server import Server
 from mcp.types import Tool, TextContent
 from src.managers.memory_manager import VectorMemoryManager
 from src.schemas.memory import CoreMemoryNode, MemorySearchFilters, DomainType
+from mcp.types import Resource, TextResourceContents
+from pydantic import AnyUrl
+
 
 logger = logging.getLogger(__name__)
 vector_manager = VectorMemoryManager()
@@ -70,3 +73,48 @@ def register_vector_tools(server: Server):
         except Exception as e:
             logger.error(f"Error en tool {name}: {e}")
             return [TextContent(type="text", text=f"Error: {str(e)}")]
+        
+
+def register_vector_resources(server: Server):
+    """Registra la introspección de Qdrant como recursos MCP."""
+
+    @server.list_resources()
+    async def list_resources() -> list[Resource]:
+        """
+        Expone las colecciones de Qdrant como recursos direccionables.
+        """
+        # Obtenemos las colecciones reales configuradas en el manager
+        collections = vector_manager._collections # [document, conversation, system]
+        
+        return [
+            Resource(
+                uri=AnyUrl(f"qdrant://{coll}/metadata"),
+                name=f"Metadatos de la colección {coll}",
+                description=f"Estado actual, conteo de vectores y configuración de {coll}",
+                mimeType="application/json"
+            ) for coll in collections
+        ]
+
+    @server.read_resource()
+    async def read_resource(uri: AnyUrl) -> str:
+        """
+        Lee el estado actual de una colección específica.
+        """
+        uri_str = str(uri)
+        if not uri_str.startswith("qdrant://"):
+            raise ValueError("URI no soportada")
+
+        # Extraemos el nombre de la colección de la URI
+        collection_name = uri_str.split("://")[1].split("/")[0]
+        
+        # Necesitarás implementar un método get_collection_info en tu VectorMemoryManager
+        stats = await vector_manager.get_collection_info(collection_name) 
+        
+        import json
+        return [
+            TextResourceContents(
+                uri=uri,
+                mimeType="application/json",
+                text=json.dumps(stats, indent=2)
+            )
+        ]

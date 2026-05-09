@@ -4,7 +4,7 @@ from starlette.middleware.cors import CORSMiddleware
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 
-from src.mcp.tools.vector_tools import register_vector_tools
+from src.mcp.tools.vector_tools import register_vector_tools, register_vector_resources
 from src.managers.config_manager import config_manager
 from src.logging_config import configure_logging
 
@@ -17,6 +17,7 @@ mcp_server = Server("coreai-mcp")
 
 # Inyectamos las herramientas vectoriales que hemos purgado
 register_vector_tools(mcp_server)
+register_vector_resources(mcp_server)
 
 # 3. Transporte SSE (Las Arterias)
 # El endpoint /messages será donde el cliente envíe sus peticiones POST
