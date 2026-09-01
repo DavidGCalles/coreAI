@@ -1,29 +1,3 @@
-# Vision Document: [coreAI]
-
-## 1. Nature and Paradigm
-[coreAI] is not an application; it is sovereign infrastructure. It is conceived as the foundational transactional and cognitive layer for any future ecosystem of automations, agents, or interfaces. Its purpose is to act as the system's immutable source of truth (SoT), isolating the complexity of hybrid storage, inference routing, and async processing within a sealed core.
-
-## 2. Sovereignty and Agnosticism
-The system prioritizes absolute control over data and execution cycles, rejecting critical external dependencies.
-*   **By-Design Local-First:** Architected to deploy and operate with maximum efficiency on owned infrastructure and dedicated hardware, keeping sensitive data and heavy inference tasks within the local perimeter.
-*   **Interface Agnosticism:** [coreAI] is strictly *headless*. It actively ignores how its data is consumed or who requests it, delegating presentation, swarm orchestration, and interaction to external clients under strict authorization rules.
-*   **Model Agnosticism:** The system's cognition is fully decoupled from the inference provider. Through an integrated proxy, it ensures system survival against obsolescence, service outages, or policy changes from any external LLM.
-
-## 3. Unified Memory Architecture
-Persistence transcends the traditional database concept to become a temporal and relational context-resolution engine.
-*   **Structural Determinism:** A robust relational database (PostgreSQL) serves as the system's reality anchor. It guarantees event log immutability, referential integrity, and entity topology.
-*   **Semantic Abstraction:** The vector layer operates in strict subordination to the relational. It provides similarity-based retrieval and context expansion, but each vector is an appendix of a deterministic record, eliminating truth fragmentation.
-
-## 4. Capability Standardization (MCP Protocol)
-The system rejects coupling and ad-hoc integrations. Any sensor reading, file system write, or third-party code execution is exposed to the core exclusively through the Model Context Protocol (MCP) standard. [coreAI] acts as a dynamic tool registry, allowing the scaling of physical and logical system capabilities without altering its foundational code.
-
-## 5. Autonomous Cortex (Event-Driven)
-[coreAI] abandons the reactive model limitation (request-response). It implements an event bus and background consumers that allow the system to work in the shadows: consolidating and compressing episodic memories, auditing inconsistencies in the relational graph, and pre-computing contexts during off-peak hours. The system structures its own state even without external stimuli.
-
----
-
-## Español (Spanish Version)
-
 # Documento de Visión: [coreAI]
 
 ## 1. Naturaleza y Paradigma

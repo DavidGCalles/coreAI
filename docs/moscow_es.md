@@ -1,75 +1,25 @@
-# 🟢 Must Have (Lo vital para que CoreAI exista)
+# MoSCoW: [coreAI] - Versión Fundacional (V1.0)
 
-Sin esto, no hay sistema; solo tenemos un script suelto.
+## MUST HAVE
+*   **Infraestructura Base:** Orquestación con `docker-compose` para aislar servicios (API, DBs, Proxy, Workers, Broker de mensajería).
+*   **Motor Relacional Base:** PostgreSQL configurado con migraciones (Alembic) y SQLAlchemy. Esquemas iniciales para Entidades y Eventos usando UUIDs primarios.
+*   **Motor Semántico Base:** Base de datos vectorial desplegada y operativa, con sincronización estricta por Foreign Key (UUID) hacia PostgreSQL.
+*   **Gateway MCP:** Servidor principal exponiendo el estándar Model Context Protocol.
+*   **Córtex Asíncrono (Workers):** Infraestructura de colas (ej. Celery/RQ + Redis) levantada y consumiendo eventos. El procesamiento en segundo plano es fundacional.
+*   **Herramienta Núcleo (memory_tool):** Endpoint MCP funcional para ejecutar operaciones CRUD sobre PostgreSQL y consultas de similitud sobre la base vectorial.
+*   **Enrutamiento Básico:** Contenedor LiteLLM configurado estáticamente para enrutar las peticiones de embeddings e inferencia necesarias.
 
-## Infraestructura Base (Docker Compose)
-Orquestación de PostgreSQL (con pgvector), Infinity (embeddings) y LiteLLM. Es el chasis mínimo.
+## SHOULD HAVE
+*   **Rutina de Consolidación (Cron):** Job asíncrono inicial de madrugada para leer eventos, resumirlos y re-inyectarlos como contexto consolidado.
+*   **Telemetría de Costes:** Registro transaccional del consumo de tokens que LiteLLM devuelve en cada llamada.
 
-## Servidor MCP vía SSE
-Implementación de la interfaz MCP sobre HTTP/SSE para permitir que CoreAI sea un servicio persistente e independiente del IDE.
+## COULD HAVE
+*   **Registro Dinámico de Herramientas:** Sistema para inyectar manifiestos de nuevos servidores MCP en caliente sin reinicios.
+*   **Control de Acceso (RBAC):** Gestión de roles y permisos a nivel de base de datos.
+*   **Decaimiento Avanzado de Memoria:** Algoritmos para archivar lógicamente recuerdos viejos según su curva de retención.
 
-## Motor de Workers (ADR-014)
-Sistema de colas para procesar la ingesta y el embedding en segundo plano, evitando bloqueos del servidor principal.
-
-## Herramienta de Búsqueda Semántica
-Una "Tool" MCP robusta que realice búsquedas vectoriales contra la base de datos local.
-
-## Recurso de Esquema (Resource)
-Un "Resource" MCP que exponga de forma determinista la estructura de la base de datos (relacional o documental) al modelo.
-
-## Gestión de Hashing
-Lógica para detectar cambios en archivos/entidades y evitar re-indexaciones innecesarias de lo que no ha cambiado.
-
----
-
-# 🟡 Should Have (Lo que da potencia real al sistema)
-
-Lo que diferencia a CoreAI de un plugin de RAG del montón:
-
-## Watcher de Sistema de Archivos
-Integración de un observador de eventos (`on_save`, `on_change`) que dispare automáticamente tareas a los Workers.
-
-## Soporte Multimodal Inicial
-Capacidad de ingesta no solo de texto plano, sino de estructuras jerárquicas (Markdown, JSON, esquemas SQL).
-
-## CLI de Administración
-Herramientas de línea de comandos para inicializar el sistema, purgar la base de datos o forzar una re-indexación masiva.
-
-## Reranking Local
-Integración de un modelo de re-ranking ligero para mejorar la precisión de los resultados del RAG antes de enviarlos al modelo.
-
----
-
-# 🔵 Could Have (Esteroides y refinamiento)
-
-Lo que hace que el sistema sea "sexy" y ultra-eficiente:
-
-## Graph Memory
-Implementación de una capa de grafos sobre Postgres para entender relaciones complejas entre entidades (no solo similitud semántica).
-
-## Dashboard de Observabilidad
-Una interfaz web mínima para ver el estado de los Workers, el uso de memoria de los vectores y los logs de las peticiones MCP.
-
-## Auto-selección de Contexto
-Lógica para que CoreAI decida qué Recursos enviar automáticamente al modelo basándose en la intención de la pregunta (sin que el modelo los pida).
-
-## Cifrado en Reposo
-Capa de seguridad local para los datos sensibles almacenados en la base de datos vectorial.
-
----
-
-# 🔴 Won't Have (Fuera de scope por ahora)
-
-Para evitar que la "Catedral" se vuelva inmanejable:
-
-## Interfaz de Chat Propia
-CoreAI es un backend; la UI la pone el cliente (Continue, VS Code, Telegram, etc.).
-
-## Gestión de Modelos (Hosting)
-CoreAI no levanta los LLMs; se conecta a ellos vía LiteLLM. El usuario es responsable de su LM Studio o instancia de Ollama.
-
-## Sincronización Cloud
-No hay "nube de CoreAI". La persistencia es estrictamente local y soberana por diseño.
-
-## Multi-tenancy complejo
-El sistema es una instancia por propósito/usuario; no está diseñado para ser un SaaS multi-usuario con roles y permisos complejos.
+## WON'T HAVE
+*   **Interfaces (UI/UX), clientes de mensajería o frontends de cualquier tipo.**
+*   **Lógicas de orquestación de Agentes o modelos de "Swarm".**
+*   **Memoria efímera de sesión orientada a flujos de conversación.**
+*   **Herramientas MCP de prueba o utilidades genéricas ajenas a la persistencia.**

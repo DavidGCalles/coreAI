@@ -1,75 +1,55 @@
-# 🟢 Must Have (Essential for CoreAI to function)
+# MoSCoW: [coreAI] - Foundational Version (V1.0)
 
-Without this, there is no system—just a loose script.
+## MUST HAVE
+*   **Core Infrastructure:** Orchestration with `docker-compose` to isolate services (API, DBs, Proxy, Workers, Message Broker).
+*   **Base Relational Engine:** PostgreSQL configured with migrations (Alembic) and SQLAlchemy. Initial schemas for Entities and Events using UUID primary keys.
+*   **Base Semantic Engine:** Vector database deployed and operational, with strict Foreign Key (UUID) synchronization toward PostgreSQL.
+*   **MCP Gateway:** Main server exposing the Model Context Protocol standard.
+*   **Async Cortex (Workers):** Queue infrastructure (e.g., Celery/RQ + Redis) up and consuming events. Background processing is foundational.
+*   **Core Tool (memory_tool):** Functional MCP endpoint for executing CRUD operations on PostgreSQL and similarity queries on the vector database.
+*   **Basic Routing:** LiteLLM container statically configured to route necessary embeddings and inference requests.
 
-## Base Infrastructure (Docker Compose)
-Orchestration of PostgreSQL (with pgvector), Infinity (embeddings), and LiteLLM. This forms the minimal framework.
+## SHOULD HAVE
+*   **Consolidation Routine (Cron):** Initial early morning async job to read events, summarize them, and re-inject as consolidated context.
+*   **Cost Telemetry:** Transactional logging of token consumption that LiteLLM returns on each call.
 
-## MCP Server via SSE
-Implementation of the MCP interface over HTTP/SSE to allow CoreAI to be a persistent, IDE-independent service.
+## COULD HAVE
+*   **Dynamic Tool Registry:** System for hot-swapping manifests of new MCP servers without restarts.
+*   **Access Control (RBAC):** Role and permission management at the database level.
+*   **Advanced Memory Decay:** Algorithms for logically archiving old memories according to their retention curve.
 
-## Worker Engine (ADR-014)
-A queue system for background processing of ingestion and embedding tasks, preventing blocking of the main server.
-
-## Semantic Search Tool
-A robust "Tool" MCP that performs vector searches against the local database.
-
-## Schema Resource (Resource)
-An MCP "Resource" that deterministically exposes the database structure (relational or document-based) to the model.
-
-## Hashing Management
-Logic to detect changes in files/entities and avoid unnecessary re-indexing of unchanged content.
-
----
-
-# 🟡 Should Have (What gives CoreAI real power)
-
-What sets CoreAI apart from a typical RAG plugin:
-
-## File System Watcher
-Integration with an event observer (`on_save`, `on_change`) that automatically triggers tasks to the Workers.
-
-## Multimodal Support
-Ability to ingest not only plain text but hierarchical structures like Markdown, JSON, and SQL schemas.
-
-## Admin CLI
-Command-line tools for initializing the system, purging the database, or forcing a bulk re-indexation.
-
-## Local Reranking
-Integration of a lightweight reranking model to improve precision of RAG results before sending them to the main model.
+## WON'T HAVE
+*   **Interfaces (UI/UX), messaging clients, or any type of frontends.**
+*   **Agent orchestration logics or "Swarm" models.**
+*   **Session-based ephemeral memory oriented toward conversation flows.**
+*   **Test MCP tools or generic utilities unrelated to persistence.**
 
 ---
 
-# 🔵 Could Have (Performance Enhancements)
+## Español (Spanish Version)
 
-What makes the system "sexy" and ultra-efficient:
+# MoSCoW: [coreAI] - Versión Fundacional (V1.0)
 
-## Graph Memory Layer
-Implementation of a graph layer over PostgreSQL to understand complex relationships between entities (not just semantic similarity).
+## MUST HAVE
+*   **Infraestructura Base:** Orquestación con `docker-compose` para aislar servicios (API, DBs, Proxy, Workers, Broker de mensajería).
+*   **Motor Relacional Base:** PostgreSQL configurado con migraciones (Alembic) y SQLAlchemy. Esquemas iniciales para Entidades y Eventos usando UUIDs primarios.
+*   **Motor Semántico Base:** Base de datos vectorial desplegada y operativa, con sincronización estricta por Foreign Key (UUID) hacia PostgreSQL.
+*   **Gateway MCP:** Servidor principal exponiendo el estándar Model Context Protocol.
+*   **Córtex Asíncrono (Workers):** Infraestructura de colas (ej. Celery/RQ + Redis) levantada y consumiendo eventos. El procesamiento en segundo plano es fundacional.
+*   **Herramienta Núcleo (memory_tool):** Endpoint MCP funcional para ejecutar operaciones CRUD sobre PostgreSQL y consultas de similitud sobre la base vectorial.
+*   **Enrutamiento Básico:** Contenedor LiteLLM configurado estáticamente para enrutar las peticiones de embeddings e inferencia necesarias.
 
-## Observability Dashboard
-A minimal web interface for monitoring Worker status, vector memory usage, and request logs.
+## SHOULD HAVE
+*   **Rutina de Consolidación (Cron):** Job asíncrono inicial de madrugada para leer eventos, resumirlos y re-inyectarlos como contexto consolidado.
+*   **Telemetría de Costes:** Registro transaccional del consumo de tokens que LiteLLM devuelve en cada llamada.
 
-## Context Auto-Selection
-Logic allowing CoreAI to automatically decide which Resources to send to the model based on query intent (without manual prompting by the model).
+## COULD HAVE
+*   **Registro Dinámico de Herramientas:** Sistema para inyectar manifiestos de nuevos servidores MCP en caliente sin reinicios.
+*   **Control de Acceso (RBAC):** Gestión de roles y permisos a nivel de base de datos.
+*   **Decaimiento Avanzado de Memoria:** Algoritmos para archivar lógicamente recuerdos viejos según su curva de retención.
 
-## At-Rest Encryption
-Local security layer for sensitive data stored in the vector database.
-
----
-
-# 🔴 Won't Have (Out of Scope)
-
-To prevent the "Cathedral" from becoming unmanageable:
-
-## Native Chat Interface
-CoreAI is a backend; UI is provided by clients like Continue, VS Code, or Telegram.
-
-## Model Management (Hosting)
-CoreAI does not host LLMs; it connects to them via LiteLLM. The user is responsible for their LM Studio or Ollama instance.
-
-## Cloud Synchronization
-No "CoreAI cloud." Persistence is strictly local and sovereign by design.
-
-## Complex Multi-tenancy
-The system operates as a single-purpose/user instance; not designed for multi-user SaaS with complex roles/permissions.
+## WON'T HAVE
+*   **Interfaces (UI/UX), clientes de mensajería o frontends de cualquier tipo.**
+*   **Lógicas de orquestación de Agentes o modelos de "Swarm".**
+*   **Memoria efímera de sesión orientada a flujos de conversación.**
+*   **Herramientas MCP de prueba o utilidades genéricas ajenas a la persistencia.**
