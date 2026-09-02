@@ -6,7 +6,6 @@ RUN pip install --no-cache-dir sentencepiece protobuf "transformers>=4.33.0" "to
 WORKDIR /app
 
 # 2. Copiamos el modelo "sanitizado" desde el contexto de build.
-# cloudbuild.yaml se encarga de descargarlo desde GCS.
 COPY models/e5-small-sanitized /data/model
 
 # 2.b. Copiamos el modelo NLI hidratado.

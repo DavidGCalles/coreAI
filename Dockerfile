@@ -1,5 +1,5 @@
-# Python 3.12-slim para mantener la imagen ligera y eficiente
-FROM python:3.12-slim
+# Python 3.13-slim para mantener la imagen ligera y eficiente
+FROM python:3.13-slim
 
 # Evita que Python genere archivos .pyc y asegura que los logs salgan directos
 ENV PYTHONDONTWRITEBYTECODE=1

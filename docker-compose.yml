@@ -1,19 +1,15 @@
 services:
+
   postgres:
     image: pgvector/pgvector:pg15
     container_name: coreai_postgres
     restart: unless-stopped
     env_file:
       - .env
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-coreai_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-coreai_db}
-    # PUERTOS CERRADOS AL HOST. Solo accesible vía red interna de Docker.
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     networks:
-      - coreai_net
+      - coreai_backend
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-coreai_user} -d $${POSTGRES_DB:-coreai_db}"]
       interval: 5s
@@ -28,19 +24,18 @@ services:
       - .env
     environment:
       - QDRANT__TELEMETRY_DISABLED=true
-    # Exponemos la UI de Qdrant para administracion
     ports:
       - "6333:6333" 
     volumes:
       - ./data/qdrant:/qdrant/storage
     networks:
-      - coreai_net
+      - coreai_backend
 
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
     container_name: coreai_litellm
     ports:
-      - "4000:4000" # Abierto para telemetría y debug
+      - "4000:4000"
     volumes:
       - ./src/config/litellm_config.edge.yaml:/app/config.yaml
     extra_hosts:
@@ -52,7 +47,8 @@ services:
       - TRANSFORMERS_OFFLINE=1
     command: "--config /app/config.yaml --port 4000"
     networks:
-      - coreai_net
+      - coreai_frontend
+      - coreai_backend
     
   infinity:
     build:
@@ -66,7 +62,7 @@ services:
     volumes:
       - ./data/infinity:/models
     networks:
-      - coreai_net
+      - coreai_backend
 
   core-mcp:
     build:
@@ -77,13 +73,8 @@ services:
       - "8000:8000"
     volumes:
       - ./src:/app/src
-    environment:
-      - POSTGRES_URL=postgresql+asyncpg://${POSTGRES_USER:-coreai_user}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-coreai_db}
-      - QDRANT_URL=http://qdrant:6333
-      - LITELLM_URL=http://litellm:4000
-      - LITELLM_API_KEY=sk-coreai-internal
-      - APP_ENV=development
-      - LOG_LEVEL=INFO
+    env_file:
+      - .env
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,7 +84,8 @@ services:
         condition: service_started
     command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     networks:
-      - coreai_net
+      - coreai_frontend
+      - coreai_backend
 
   worker-node:
     build:
@@ -102,24 +94,16 @@ services:
     container_name: coreai_worker
     volumes:
       - ./src:/app/src
-    environment:
-      - POSTGRES_URL=postgresql+asyncpg://${POSTGRES_USER:-coreai_user}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-coreai_db}
-      - QDRANT_URL=http://qdrant:6333
-      - LITELLM_URL=http://litellm:4000
-      - LITELLM_API_KEY=sk-coreai-internal
-      - APP_ENV=development
-      - LOG_LEVEL=INFO
+    env_file:
+      - .env
     depends_on:
       postgres:
         condition: service_healthy
-    # Comando dummy: mantiene el contenedor vivo sin hacer nada
     command: ["tail", "-f", "/dev/null"]
     networks:
-      - coreai_net
+      - coreai_frontend
+      - coreai_backend
 
-  # ==========================================
-  # HERRAMIENTAS DE GESTIÓN (Aisladas al host)
-  # ==========================================
   adminer:
     image: adminer:latest
     container_name: coreai_adminer
@@ -130,8 +114,11 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      - coreai_net
+      - coreai_backend
 
 networks:
-  coreai_net:
+  coreai_frontend:
     driver: bridge
+  coreai_backend:
+    driver: bridge
+    internal: true
