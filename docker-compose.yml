@@ -1,14 +1,11 @@
 services:
+
   postgres:
     image: pgvector/pgvector:pg15
     container_name: coreai_postgres
     restart: unless-stopped
     env_file:
       - .env
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-coreai_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-coreai_db}
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     networks:
@@ -27,7 +24,6 @@ services:
       - .env
     environment:
       - QDRANT__TELEMETRY_DISABLED=true
-    # Exponemos la UI de Qdrant para administracion
     ports:
       - "6333:6333" 
     volumes:
@@ -39,7 +35,7 @@ services:
     image: ghcr.io/berriai/litellm:main-latest
     container_name: coreai_litellm
     ports:
-      - "4000:4000" # Abierto para telemetría y debug
+      - "4000:4000"
     volumes:
       - ./src/config/litellm_config.edge.yaml:/app/config.yaml
     extra_hosts:
@@ -77,13 +73,8 @@ services:
       - "8000:8000"
     volumes:
       - ./src:/app/src
-    environment:
-      - POSTGRES_URL=postgresql+asyncpg://${POSTGRES_USER:-coreai_user}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-coreai_db}
-      - QDRANT_URL=http://qdrant:6333
-      - LITELLM_URL=http://litellm:4000
-      - LITELLM_API_KEY=sk-coreai-internal
-      - APP_ENV=development
-      - LOG_LEVEL=INFO
+    env_file:
+      - .env
     depends_on:
       postgres:
         condition: service_healthy
@@ -103,25 +94,16 @@ services:
     container_name: coreai_worker
     volumes:
       - ./src:/app/src
-    environment:
-      - POSTGRES_URL=postgresql+asyncpg://${POSTGRES_USER:-coreai_user}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-coreai_db}
-      - QDRANT_URL=http://qdrant:6333
-      - LITELLM_URL=http://litellm:4000
-      - LITELLM_API_KEY=sk-coreai-internal
-      - APP_ENV=development
-      - LOG_LEVEL=INFO
+    env_file:
+      - .env
     depends_on:
       postgres:
         condition: service_healthy
-    # Comando dummy: mantiene el contenedor vivo sin hacer nada
     command: ["tail", "-f", "/dev/null"]
     networks:
       - coreai_frontend
       - coreai_backend
 
-  # ==========================================
-  # HERRAMIENTAS DE GESTIÓN (Aisladas al host)
-  # ==========================================
   adminer:
     image: adminer:latest
     container_name: coreai_adminer

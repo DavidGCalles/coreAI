@@ -1,2 +1,29 @@
-EMBEDDING_API_BASE="http://coreai_infinity:8080"
-LOCAL_LLM_API_BASE="http://192.168.1.37:1234/v1"
+# ==========================================
+# PERSISTENCIA (Postgres)
+# ==========================================
+POSTGRES_USER=coreai_user
+POSTGRES_PASSWORD=postgres_secure_password
+POSTGRES_DB=coreai_db
+# URL +ConfigManager
+POSTGRES_URL=postgresql+asyncpg://coreai_user:postgres_secure_password@postgres:5432/coreai_db
+
+# ==========================================
+# RUTAS INTERNAS (Servicios Docker)
+# ==========================================
+QDRANT_URL=http://qdrant:6333
+LITELLM_URL=http://litellm:4000
+LITELLM_API_KEY=sk-coreai-internal
+
+# ==========================================
+# LLM / EMBEDDINGS (Para LiteLLM Config)
+# ==========================================
+# Apunta al servicio interno de embeddings (Infinity)
+EMBEDDING_API_BASE=http://infinity:8080
+# Apunta a tu servidor LLM local físico (ej. LM Studio/Ollama)
+LOCAL_LLM_API_BASE=http://192.168.1.37:1234/v1
+
+# ==========================================
+# APLICACIÓN MCP
+# ==========================================
+APP_ENV=development
+LOG_LEVEL=INFO
