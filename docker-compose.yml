@@ -9,11 +9,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-coreai_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-coreai_db}
-    # PUERTOS CERRADOS AL HOST. Solo accesible vía red interna de Docker.
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     networks:
-      - coreai_net
+      - coreai_backend
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-coreai_user} -d $${POSTGRES_DB:-coreai_db}"]
       interval: 5s
@@ -34,7 +33,7 @@ services:
     volumes:
       - ./data/qdrant:/qdrant/storage
     networks:
-      - coreai_net
+      - coreai_backend
 
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
@@ -52,7 +51,8 @@ services:
       - TRANSFORMERS_OFFLINE=1
     command: "--config /app/config.yaml --port 4000"
     networks:
-      - coreai_net
+      - coreai_frontend
+      - coreai_backend
     
   infinity:
     build:
@@ -66,7 +66,7 @@ services:
     volumes:
       - ./data/infinity:/models
     networks:
-      - coreai_net
+      - coreai_backend
 
   core-mcp:
     build:
@@ -93,7 +93,8 @@ services:
         condition: service_started
     command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     networks:
-      - coreai_net
+      - coreai_frontend
+      - coreai_backend
 
   worker-node:
     build:
@@ -115,7 +116,8 @@ services:
     # Comando dummy: mantiene el contenedor vivo sin hacer nada
     command: ["tail", "-f", "/dev/null"]
     networks:
-      - coreai_net
+      - coreai_frontend
+      - coreai_backend
 
   # ==========================================
   # HERRAMIENTAS DE GESTIÓN (Aisladas al host)
@@ -130,8 +132,11 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      - coreai_net
+      - coreai_backend
 
 networks:
-  coreai_net:
+  coreai_frontend:
     driver: bridge
+  coreai_backend:
+    driver: bridge
+    internal: true
