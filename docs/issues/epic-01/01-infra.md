@@ -12,3 +12,7 @@ El archivo `docker-compose.yml` actual contiene la infraestructura base, pero ar
 ## Criterios de Aceptación
 - El comando `docker-compose up -d` levanta el clúster refactorizado sin errores.
 - Los contenedores de base de datos y broker no exponen puertos al host, quedando aislados en la red interna. Solo `core-api` y `llm-proxy` (si es necesario para debug) tienen salida externa.
+
+## Comentarios
+
+La nomenclatura existente va a quedarse así excepto core-mcp. 
