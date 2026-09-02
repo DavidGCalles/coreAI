@@ -1,5 +1,4 @@
 services:
-  # PostgreSQL with pgvector extension for structured data persistence
   postgres:
     image: pgvector/pgvector:pg15
     container_name: coreai_postgres
@@ -10,37 +9,38 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-coreai_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-coreai_db}
-    ports:
-      - "5432:5432"
+    # PUERTOS CERRADOS AL HOST. Solo accesible vía red interna de Docker.
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - coreai_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-coreai_user} -d $${POSTGRES_DB:-coreai_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  # Qdrant for vector search with local disk persistence
   qdrant:
     image: qdrant/qdrant:latest
     container_name: coreai_qdrant
-    ports:
-      - "6333:6333"  # REST API and Dashboard UI
-      - "6334:6334"  # gRPC Port (internal)
-    volumes:
-      - ./data/qdrant:/qdrant/storage
+    restart: always
     env_file:
       - .env
     environment:
       - QDRANT__TELEMETRY_DISABLED=true
-    restart: always
+    # Exponemos la UI de Qdrant para administracion
+    ports:
+      - "6333:6333" 
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    networks:
+      - coreai_net
 
-  # LiteLLM for LLM orchestration and tool calling
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
     container_name: coreai_litellm
     ports:
-      - "4000:4000"
+      - "4000:4000" # Abierto para telemetría y debug
     volumes:
       - ./src/config/litellm_config.edge.yaml:/app/config.yaml
     extra_hosts:
@@ -51,35 +51,33 @@ services:
       - HF_HUB_OFFLINE=1
       - TRANSFORMERS_OFFLINE=1
     command: "--config /app/config.yaml --port 4000"
-
-  # Infinity for embedding generation (custom build from lifeOS)
+    networks:
+      - coreai_net
+    
   infinity:
     build:
       context: .
       dockerfile: Dockerfile.infinity
     container_name: coreai_infinity
-    ports:
-      - "7997:8080"
-    volumes:
-      - ./data/infinity:/models
+    restart: unless-stopped
     env_file:
       - .env
     command: ["--model-id", "/data/model", "--model-id", "/data/nli_model"]
-    restart: unless-stopped
+    volumes:
+      - ./data/infinity:/models
+    networks:
+      - coreai_net
 
-# CoreAI - Servidor MCP Principal (FastAPI + SSE)
-  coreai_server:
+  core-mcp:
     build:
       context: .
-      dockerfile: Dockerfile # Asumiendo tu Dockerfile principal de la aplicación
+      dockerfile: Dockerfile
     container_name: coreai_mcp
     ports:
       - "8000:8000"
     volumes:
-      # Montamos el código en vivo para que el reload de uvicorn funcione mientras picas
       - ./src:/app/src
     environment:
-      # Aquí brilla la limpieza del ConfigManager. Inyectamos los hostnames de Docker.
       - POSTGRES_URL=postgresql+asyncpg://${POSTGRES_USER:-coreai_user}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-coreai_db}
       - QDRANT_URL=http://qdrant:6333
       - LITELLM_URL=http://litellm:4000
@@ -93,6 +91,47 @@ services:
         condition: service_started
       litellm:
         condition: service_started
-    # Sobrescribimos el comando para forzar el hot-reload en local
     command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    networks:
+      - coreai_net
 
+  worker-node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: coreai_worker
+    volumes:
+      - ./src:/app/src
+    environment:
+      - POSTGRES_URL=postgresql+asyncpg://${POSTGRES_USER:-coreai_user}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-coreai_db}
+      - QDRANT_URL=http://qdrant:6333
+      - LITELLM_URL=http://litellm:4000
+      - LITELLM_API_KEY=sk-coreai-internal
+      - APP_ENV=development
+      - LOG_LEVEL=INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Comando dummy: mantiene el contenedor vivo sin hacer nada
+    command: ["tail", "-f", "/dev/null"]
+    networks:
+      - coreai_net
+
+  # ==========================================
+  # HERRAMIENTAS DE GESTIÓN (Aisladas al host)
+  # ==========================================
+  adminer:
+    image: adminer:latest
+    container_name: coreai_adminer
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - coreai_net
+
+networks:
+  coreai_net:
+    driver: bridge
