@@ -23,7 +23,10 @@ class ConfigManager:
 
     def get_postgres_url(self) -> str:
         """Obtiene y formatea la URL de conexión para el driver asíncrono."""
-        url = os.getenv("POSTGRES_URL", "postgresql://postgres:postgres@localhost:5432/coreai")
+        url = os.getenv("POSTGRES_URL", "postgresql+asyncpg://coreai_user:postgres_secure_password@localhost:5432/coreai_db")
+
+        if os.getenv("APP_ENV", "development") == "development" and "@postgres:" in url:
+            url = url.replace("@postgres:", "@192.168.1.20:")
         return self._ensure_asyncpg_url(url)
 
     def _ensure_asyncpg_url(self, url: str) -> str:
