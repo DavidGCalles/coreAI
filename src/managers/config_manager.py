@@ -39,8 +39,11 @@ class ConfigManager:
 
     def get_qdrant_config(self) -> dict[str, Any]:
         """Configuración del motor vectorial."""
+        url = os.getenv("QDRANT_URL", "http://qdrant:6333")
+        if os.getenv("APP_ENV", "development") == "development" and "qdrant" in url:
+            url = url.replace("qdrant", "192.168.1.20")
         return {
-            "url": os.getenv("QDRANT_URL", "http://localhost:6333"),
+            "url": url,
             "api_key": os.getenv("QDRANT_API_KEY", None)
         }
 
