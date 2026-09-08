@@ -1,6 +1,7 @@
 import os
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import DeclarativeBase
 from src.managers.config_manager import config_manager
 
 # Instanciamos el engine tirando de tu config_manager. 
@@ -21,4 +22,5 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False
 )
 
-Base = declarative_base()
+class Base(DeclarativeBase):
+    pass
