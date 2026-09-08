@@ -35,7 +35,12 @@ class Session(Base):
     entity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('entities.id', ondelete='CASCADE'))
     
     status: Mapped[SessionStatus] = mapped_column(
-        SQLEnum(SessionStatus, name='session_status', create_type=False), 
+        SQLEnum(
+            SessionStatus, 
+            name='session_status', 
+            create_type=False,
+            values_callable=lambda obj: [e.value for e in obj]
+        ), 
         default=SessionStatus.ACTIVE
     )
     
@@ -55,11 +60,21 @@ class Message(Base):
     consolidated: Mapped[bool] = mapped_column(Boolean, default=False)
     
     visibility: Mapped[Visibility] = mapped_column(
-        SQLEnum(Visibility, name='memory_visibility', create_type=False), 
+        SQLEnum(
+            Visibility, 
+            name='memory_visibility', 
+            create_type=False,
+            values_callable=lambda obj: [e.value for e in obj]
+        ), 
         default=Visibility.PRIVATE
     )
     domain: Mapped[DomainType] = mapped_column(
-        SQLEnum(DomainType, name='memory_domain_type', create_type=False), 
+        SQLEnum(
+            DomainType, 
+            name='memory_domain_type', 
+            create_type=False,
+            values_callable=lambda obj: [e.value for e in obj]
+        ), 
         default=DomainType.CONVERSATION
     )
     
@@ -75,7 +90,12 @@ class Task(Base):
     session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('sessions.id', ondelete='CASCADE'))
     
     status: Mapped[TaskStatus] = mapped_column(
-        SQLEnum(TaskStatus, name='task_status', create_type=False), 
+        SQLEnum(
+            TaskStatus, 
+            name='task_status', 
+            create_type=False,
+            values_callable=lambda obj: [e.value for e in obj]
+        ), 
         default=TaskStatus.PENDING
     )
     payload: Mapped[dict] = mapped_column(JSON, default={})
@@ -93,8 +113,22 @@ class Event(Base):
     entity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('entities.id', ondelete='CASCADE'))
     
     content: Mapped[str] = mapped_column(Text)
-    domain: Mapped[DomainType] = mapped_column(SQLEnum(DomainType, name='memory_domain_type', create_type=False))
-    visibility: Mapped[Visibility] = mapped_column(SQLEnum(Visibility, name='memory_visibility', create_type=False))
+    domain: Mapped[DomainType] = mapped_column(
+        SQLEnum(
+            DomainType, 
+            name='memory_domain_type', 
+            create_type=False,
+            values_callable=lambda obj: [e.value for e in obj]
+        )
+    )
+    visibility: Mapped[Visibility] = mapped_column(
+        SQLEnum(
+            Visibility, 
+            name='memory_visibility', 
+            create_type=False,
+            values_callable=lambda obj: [e.value for e in obj]
+        )
+    )
     consolidated: Mapped[bool] = mapped_column(Boolean, default=False)
     
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
