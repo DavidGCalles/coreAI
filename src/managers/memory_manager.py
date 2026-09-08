@@ -1,234 +1,124 @@
-import os
 import logging
-import time
-import asyncio
-from openai import AsyncOpenAI
-from qdrant_client import AsyncQdrantClient, models
-from src.schemas.memory import CoreMemoryNode, MemorySearchFilters, DomainType
+import uuid
+from typing import Any, Sequence
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.logging_config import configure_logging
-configure_logging(level=logging.INFO)
+from src.schemas.memory import DomainType, MemorySearchFilters, Visibility
+from src.repositories.relational import EventRepository
+from src.repositories.vector import VectorRepository
+from src.db.models import Event
+
 logger = logging.getLogger(__name__)
 
-EMBEDDING_DIMENSION = 384  # Configurado para multilingual-e5-small o similar vía Infinity
-
-class VectorMemoryManager:
+class HybridMemoryManager:
     """
-    Motor vectorial agnóstico para CoreAI.
-    Gestiona la persistencia y búsqueda semántica aislada por multitenencia.
+    Orquestador Transaccional.
+    Coordina la inyección dual (Postgres + Qdrant) y garantiza la consistencia (Rollback).
+    No contiene lógica directa de bases de datos.
     """
-
-    def __init__(self):
-        self._client = None
-        self._collections = [domain.value for domain in DomainType]
-
-    async def _initialize_client(self):
-        from src.managers.config_manager import config_manager
-        
-        if self._client is not None:
-            return
-
-        q_config = config_manager.get_qdrant_config()
-        host = q_config["url"]
-        api_key = q_config.get("api_key")
-
-        try:
-            if api_key:
-                self._client = AsyncQdrantClient(url=host, api_key=api_key)
-            else:
-                url = host if "://" in host else f"http://{host}:6333"
-                self._client = AsyncQdrantClient(url=url)
-        except Exception as e:
-            logger.error("Fallo crítico al conectar con Qdrant: %s", e, exc_info=True)
-            raise ConnectionError("Fallo crítico al conectar con Qdrant: %s", e)
-
-        await self._ensure_all_collections()
-
-    async def _ensure_collection(self, collection_name: str) -> None:
-        try:
-            await self._client.get_collection(collection_name=collection_name)
-        except Exception:
-            logger.info("Colección '%s' no encontrada. Inicializando...", collection_name)
-            await self._client.create_collection(
-                collection_name=collection_name,
-                vectors_config=models.VectorParams(
-                    size=EMBEDDING_DIMENSION,
-                    distance=models.Distance.COSINE,
-                ),
-            )
-
-        # Índices estratégicos para el filtrado estricto (RBAC y Tags)
-        payload_indexes = ["tenant_id", "visibility", "metadata.tags", "metadata.source_id"]
-        
-        for field in payload_indexes:
-            try:
-                await self._client.create_payload_index(
-                    collection_name=collection_name,
-                    field_name=field,
-                    field_schema=models.PayloadSchemaType.KEYWORD,
-                    wait=False,
-                )
-            except Exception as e:
-                logger.debug("Índice ya existente o error menor en '%s': %s", field, e)
-
-    async def _ensure_all_collections(self) -> None:
-        for coll in self._collections:
-            await self._ensure_collection(coll)
+    def __init__(
+        self, 
+        session: AsyncSession, 
+        relational_repo: EventRepository, 
+        vector_repo: VectorRepository
+    ):
+        self.session = session
+        self.relational_repo = relational_repo
+        self.vector_repo = vector_repo
 
     async def _get_embedding(self, text: str) -> list[float]:
         """
-        Delega la generación al proxy unificado de LiteLLM.
-        El enrutamiento real hacia Infinity se resuelve en la capa de red del Docker Compose.
+        Punto de aislamiento para la llamada a LiteLLM.
+        Se implementará en el Epic 3. Por ahora, levanta una excepción si no se mockea.
         """
-        litellm_url = os.getenv("LITELLM_URL", "http://localhost:4000")
-        if not litellm_url.startswith("http"):
-            litellm_url = f"http://{litellm_url}"
+        raise NotImplementedError("Llamada al LLM Proxy no implementada (Requiere Epic 3).")
+
+    async def add_memory(
+        self, 
+        entity_id: uuid.UUID, 
+        domain: DomainType, 
+        content: str, 
+        visibility: Visibility = Visibility.PRIVATE,
+        metadata: dict[str, Any] = None
+    ) -> uuid.UUID:
+        """
+        Flujo de Ingesta Transaccional:
+        1. Crea en Postgres (obtiene UUID temporal vía flush).
+        2. Genera Embedding.
+        3. Inyecta en Qdrant.
+        4. Si todo va bien, Commit. Si Qdrant falla, Rollback.
+        """
+        metadata = metadata or {}
+        
+        try:
+            # 1. Inserción Relacional (Flush para generar UUID, SIN commit)
+            new_event = await self.relational_repo.create(
+                entity_id=entity_id,
+                content=content,
+                domain=domain,
+                visibility=visibility
+            )
             
-        client = AsyncOpenAI(
-            base_url=f"{litellm_url.rstrip('/')}/v1",
-            api_key="sk-coreai-internal"
+            # 2. IA: Generación de Vector
+            vector = await self._get_embedding(content)
+            
+            # 3. Inserción Vectorial (Qdrant)
+            # El tenant_id lo podemos derivar del entity_id para mantener el aislamiento
+            payload = {
+                "tenant_id": str(entity_id),
+                "content": content,
+                "metadata": metadata
+            }
+            
+            await self.vector_repo.upsert(
+                domain=domain,
+                entity_id=new_event.id,
+                vector=vector,
+                payload=payload
+            )
+            
+            # 4. Consistencia: Asentamos la transacción
+            await self.session.commit()
+            logger.info("Memoria híbrida consolidada con éxito: %s", new_event.id)
+            return new_event.id
+            
+        except Exception as e:
+            # 5. Cortafuegos: Si Qdrant (o el LLM) revienta, abortamos Postgres
+            await self.session.rollback()
+            logger.error("Fallo en la inyección de memoria, transacción abortada: %s", e)
+            raise
+
+    async def search_memory(self, entity_id: uuid.UUID, query: str, filters: MemorySearchFilters) -> Sequence[Event]:
+        """
+        Patrón Scatter-Gather:
+        1. Busca similitud en Qdrant (obtiene UUIDs).
+        2. Hidrata los objetos completos desde Postgres.
+        """
+        # 1. IA: Vectorizamos la pregunta
+        query_vector = await self._get_embedding(query)
+        
+        # 2. Búsqueda Vectorial (Devuelve puntos con score e ID)
+        domain = filters.domain or DomainType.SYSTEM
+        scored_points = await self.vector_repo.search(
+            domain=domain,
+            query_vector=query_vector,
+            filters=filters
         )
         
-        try:
-            response = await client.embeddings.create(
-                model="text-embedding",
-                input=[text]
-            )
-            return response.data[0].embedding
-        except Exception as e:
-            logger.error("Fallo en proxy de embeddings: %s", str(e), exc_info=True)
-            raise
-
-    def _build_qdrant_filter(self, filters: MemorySearchFilters) -> models.Filter:
-        """Construye un árbol de condiciones strictas en Qdrant desde el Pydantic schema."""
-        must_conditions = [
-            models.FieldCondition(
-                key="tenant_id", 
-                match=models.MatchValue(value=filters.tenant_id)
-            )
-        ]
-
-        if filters.tags_all:
-            for tag in filters.tags_all:
-                must_conditions.append(
-                    models.FieldCondition(key="metadata.tags", match=models.MatchValue(value=tag))
-                )
-        
-        if filters.tags_any:
-            must_conditions.append(
-                models.FieldCondition(key="metadata.tags", match=models.MatchAny(any=filters.tags_any))
-            )
+        if not scored_points:
+            return []
             
-        if filters.properties_match:
-            for key, value in filters.properties_match.items():
-                must_conditions.append(
-                    models.FieldCondition(
-                        key=f"metadata.properties.{key}", 
-                        match=models.MatchValue(value=value)
-                    )
-                )
-
-        return models.Filter(must=must_conditions)
-
-    async def add_memory(self, node: CoreMemoryNode) -> str:
-        """
-        Ingesta atómica. Serializa el nodo y lo inyecta en su dominio correspondiente.
-        """
-        await self._initialize_client()
+        # Extraemos los UUIDs crudos y los casteamos para Postgres
+        memory_ids = [uuid.UUID(point.id) for point in scored_points]
         
-        vector = await self._get_embedding(node.content)
-        payload = node.model_dump(mode="json")
-        collection = node.domain.value
-
-        try:
-            await self._client.upsert(
-                collection_name=collection,
-                points=[
-                    models.PointStruct(
-                        id=str(node.id),
-                        vector=vector,
-                        payload=payload
-                    )
-                ],
-                wait=True,
-            )
-            logger.info("Nodo %s insertado en %s para tenant %s", node.id, collection, node.tenant_id)
-            return str(node.id)
-        except Exception as e:
-            logger.error("Fallo al insertar nodo %s: %s", node.id, e, exc_info=True)
-            raise
-
-    async def search_memory(self, query: str, filters: MemorySearchFilters) -> list[CoreMemoryNode]:
-        """
-        Búsqueda semántica condicional. Si no se provee dominio, realiza un scatter-gather
-        sobre todas las colecciones y devuelve los N mejores resultados consolidados.
-        """
-        await self._initialize_client()
-        query_vector = await self._get_embedding(query)
-        qdrant_filter = self._build_qdrant_filter(filters)
+        # 3. Hidratación Relacional (WHERE id IN ...)
+        stmt = select(Event).where(Event.id.in_(memory_ids))
+        result = await self.session.execute(stmt)
+        hydrated_events = result.scalars().all()
         
-        target_collections = [filters.domain.value] if filters.domain else self._collections
+        # Nota: Postgres devuelve los IN desordenados. Si quieres mantener 
+        # el orden semántico (por score), habría que reordenar `hydrated_events` 
+        # basándote en la lista original `memory_ids`.
         
-        async def _search_collection(collection_name: str):
-            try:
-                return await self._client.search(
-                    collection_name=collection_name,
-                    query_vector=query_vector,
-                    query_filter=qdrant_filter,
-                    limit=filters.limit,
-                    score_threshold=filters.score_threshold
-                )
-            except Exception as e:
-                logger.warning("Error buscando en %s: %s", collection_name, e)
-                return []
-
-        # Búsqueda concurrente si hay múltiples colecciones
-        results = await asyncio.gather(*[_search_collection(c) for c in target_collections])
-        
-        # Aplanar, ordenar por score descendente y truncar al límite global
-        all_points = [point for sublist in results for point in sublist]
-        all_points.sort(key=lambda x: x.score, reverse=True)
-        top_points = all_points[:filters.limit]
-
-        parsed_nodes = []
-        for point in top_points:
-            try:
-                parsed_nodes.append(CoreMemoryNode.model_validate(point.payload))
-            except Exception as e:
-                logger.error("Integridad comprometida en nodo %s: %s", point.id, e)
-                continue
-
-        return parsed_nodes
-
-    async def delete_memory(self, memory_id: str, domain: DomainType | None = None):
-        """
-        Borrado por ID. Si no se especifica dominio, barre todas las colecciones.
-        """
-        await self._initialize_client()
-        target_collections = [domain.value] if domain else self._collections
-        
-        for collection in target_collections:
-            try:
-                await self._client.delete(
-                    collection_name=collection,
-                    points_selector=models.PointIdsList(points=[str(memory_id)]),
-                )
-            except Exception as e:
-                logger.error("Error borrando %s de %s: %s", memory_id, collection, e, exc_info=True)
-                
-    async def get_collection_info(self, collection_name: str) -> dict:
-        """Obtiene estadísticas reales de la colección en Qdrant."""
-        await self._initialize_client()
-        try:
-            collection_info = await self._client.get_collection(collection_name=collection_name)
-            return {
-                "status": collection_info.status,
-                "vectors_count": collection_info.vectors_count,
-                "config": {
-                    "vector_size": collection_info.config.params.vectors.size,
-                    "distance": collection_info.config.params.vectors.distance.value
-                }
-            }
-        except Exception as e:
-            logger.error(f"Error al obtener info de {collection_name}: {e}")
-            return {"error": str(e)}
+        return hydrated_events
