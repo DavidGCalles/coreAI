@@ -10,12 +10,12 @@ Persistencia determinista y semántica de estado sin fragmentación. Este epic a
 Configuración del motor relacional en PostgreSQL (SQLAlchemy + asyncpg) e inicialización del sistema de migraciones (Alembic).
 
 **Tareas**
-- [ ] Configurar motor asíncrono de SQLAlchemy (`asyncpg`) e inicializar Alembic (`alembic init -t async`).
-- [ ] Migrar tipos `ENUM`: `task_status`, `memory_visibility`, `memory_domain_type`.
-- [ ] Definir modelos: `Entity` (UUID, rol, metadatos), `Task` (UUID, FK, status, payload) y `Event` (UUID, FK, content, domain, visibility, consolidated).
-- [ ] Implementar índices de rendimiento: `idx_tasks_status` y `idx_events_owner`.
-- [ ] Generar y aplicar la migración inicial unificada.
-- [ ] **[Testing]** Crear un script o test (`pytest`) de *health check* que verifique la conexión asíncrona a la base de datos y valide que las tablas existen.
+- [x] Configurar motor asíncrono de SQLAlchemy (`asyncpg`) e inicializar Alembic (`alembic init -t async`).
+- [x] Migrar tipos `ENUM`: `task_status`, `memory_visibility`, `memory_domain_type`.
+- [x] Definir modelos: `Entity` (UUID, rol, metadatos), `Task` (UUID, FK, status, payload) y `Event` (UUID, FK, content, domain, visibility, consolidated).
+- [x] Implementar índices de rendimiento: `idx_tasks_status` y `idx_events_owner`.
+- [x] Generar y aplicar la migración inicial unificada.
+- [x] **[Testing]** Crear un script o test (`pytest`) de *health check* que verifique la conexión asíncrona a la base de datos y valide que las tablas existen.
 
 **Criterios de Aceptación**
 - `alembic upgrade head` levanta el esquema sin excepciones.
@@ -28,9 +28,9 @@ Configuración del motor relacional en PostgreSQL (SQLAlchemy + asyncpg) e inici
 Validación de la infraestructura del motor vectorial mediante el cliente asíncrono oficial, asegurando la inyección estricta de UUIDs.
 
 **Tareas**
-- [ ] Configurar la conexión del cliente asíncrono de Qdrant.
-- [ ] Implementar función de inicialización para la colección `core_memory` (dimensiones y métrica Coseno).
-- [ ] **[Testing]** Crear un *fixture* o test unitario que levante el cliente, cree una colección temporal, inserte un vector con UUID de Python, ejecute una búsqueda de similitud y destruya la colección.
+- [x] Configurar la conexión del cliente asíncrono de Qdrant.
+- [x] Implementar función de inicialización para la colección `core_memory` (dimensiones y métrica Coseno).
+- [x] **[Testing]** Crear un *fixture* o test unitario que levante el cliente, cree una colección temporal, inserte un vector con UUID de Python, ejecute una búsqueda de similitud y destruya la colección.
 
 **Criterios de Aceptación**
 - La conexión asíncrona con el contenedor de Docker no sufre *timeouts*.
@@ -43,7 +43,7 @@ Validación de la infraestructura del motor vectorial mediante el cliente asínc
 Aislamiento de la complejidad de las consultas distribuidas a través del patrón repositorio.
 
 **Tareas**
-- [ ] Implementar `RelationalRepository` (CRUD asíncrono sobre `Entity`, `Task`, `Event`).
+- [x] Implementar `RelationalRepository` (CRUD asíncrono sobre `Entity`, `Task`, `Event`).
 - [ ] Implementar `VectorRepository` (Upsert/Search sobre Qdrant con control de integridad de UUID).
 - [ ] Implementar método unificado de búsqueda híbrida.
 - [ ] **[Testing]** Crear un test de integración (End-to-End de la capa de datos).
