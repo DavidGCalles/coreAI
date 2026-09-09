@@ -9,9 +9,9 @@ Abstracción total del motor cognitivo priorizando la soberanía de los datos (l
 **Contexto**
 Antes de configurar el proxy, el motor cognitivo local debe estar levantado y testeado de forma aislada.
 **Tareas**
-- [ ] Configurar el servicio `infinity` en el `docker-compose.yml` utilizando el `Dockerfile.infinity` existente.
-- [ ] Mapear los volúmenes necesarios para descargar y cachear los modelos sin depender de descargas en cada reinicio.
-- [ ] **[Testing]** Acceder al Swagger UI nativo de Infinity (puerto expuesto temporalmente) y ejecutar manualmente una prueba de generación de embeddings para validar que el modelo carga en GPU/CPU correctamente.
+- [x] Configurar el servicio `infinity` en el `docker-compose.yml` utilizando el `Dockerfile.infinity` existente.
+- [x] Mapear los volúmenes necesarios para descargar y cachear los modelos sin depender de descargas en cada reinicio.
+- [x] **[Testing]** Acceder al Swagger UI nativo de Infinity (puerto expuesto temporalmente) y ejecutar manualmente una prueba de generación de embeddings para validar que el modelo carga en GPU/CPU correctamente.
 **Criterios de Aceptación**
 - El contenedor levanta sin *crash loops*.
 - El Swagger responde y el test manual devuelve un vector con las dimensiones correctas.
