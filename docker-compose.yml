@@ -1,5 +1,4 @@
 services:
-
   postgres:
     image: pgvector/pgvector:pg15
     container_name: coreai_postgres
@@ -50,8 +49,8 @@ services:
     command: "--config /app/config.yaml --port 4000"
     networks:
       - coreai_frontend
-      - coreai_backend
-    
+      - coreai_backend 
+
   infinity:
     build:
       context: .
@@ -60,9 +59,9 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    ports:
+      - "8080:8080"
     command: ["--model-id", "/data/model", "--model-id", "/data/nli_model"]
-    volumes:
-      - ./data/infinity:/models
     networks:
       - coreai_backend
 
@@ -123,4 +122,3 @@ networks:
     driver: bridge
   coreai_backend:
     driver: bridge
-    #internal: true
