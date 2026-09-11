@@ -1,6 +1,6 @@
 import uuid
 import enum
-from sqlalchemy import String, Text, Boolean, JSON, ForeignKey, DateTime, Index
+from sqlalchemy import String, Text, Boolean, JSON, ForeignKey, DateTime, Index, Integer
 from sqlalchemy.dialects.postgresql import UUID, ENUM as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -135,4 +135,25 @@ class Event(Base):
 
     __table_args__ = (
         Index('idx_events_owner', 'entity_id'),
+    )
+
+class LLMAudit(Base):
+    __tablename__ = 'llm_audit'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    
+    # Vinculación opcional al responsable del coste (puede ser un humano, un agente o el propio sistema)
+    entity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('entities.id', ondelete='SET NULL'), nullable=True)
+    
+    model_used: Mapped[str] = mapped_column(String(100), nullable=False)
+    
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        # Índice vital para hacer queries de "cuánto ha gastado X este mes" sin escanear toda la tabla
+        Index('idx_audit_entity_time', 'entity_id', 'created_at'),
     )
