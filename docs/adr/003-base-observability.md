@@ -96,3 +96,37 @@ Importar (no crear desde cero) un dashboard genérico compatible para visualizar
 * Generar una petición cURL al proxy de LiteLLM simulando tráfico.
 * Abrir la pestaña *Explore* en Grafana y ejecutar `{compose_service="litellm"}` en LogQL: el log de la petición debe aparecer.
 * El dashboard importado debe reflejar el pico de carga o latencia asociado a la petición de prueba.
+
+# Post-Mortem Técnico: ADR-003 - Capa Base de Observabilidad
+
+## Resumen Ejecutivo
+El **ADR-003** consolida el subsistema de telemetría y centralización de logs para `[coreAI]`, estableciendo las bases de monitorización (Prometheus + Loki + Grafana) previas al despliegue del Córtex Asíncrono (Epic 4). Fieles a la directriz de evitar la entropía arquitectónica y el *scope creep*, se descartaron agentes intermediarios pesados (como Grafana Alloy) en favor de una ingesta cruda y directa a través del demonio nativo de Docker.
+
+## 1. Decisiones Arquitectónicas Clave
+
+### A. Inyección Directa mediante Driver de Docker
+Se configuró el plugin `loki-docker-driver` a nivel de host. En lugar de establecerlo como política global en `daemon.json` (lo cual habría secuestrado los logs de otros contenedores ajenos al proyecto, como Home Assistant), se inyectó selectivamente por servicio. Para que el host físico pudiese enrutar los logs hacia la red interna de Docker, se expuso el puerto `3100` de Loki estrictamente hacia el localhost (`127.0.0.1:3100`).
+
+### B. DRY en Infraestructura (YAML Anchors)
+Para evitar la repetición de código y facilitar el mantenimiento, se encapsuló la configuración del driver de Loki en un ancla YAML (`x-logging: &loki-logging`). Esto permitió inyectar el bloque de telemetría en los nodos cognitivos (`litellm`, `infinity`, `core-mcp`) de forma modular, manteniendo a las bases de datos (Qdrant, Postgres) silenciadas por defecto para no saturar el disco con ruido de infraestructura base.
+
+### C. Eficiencia SRE y Optimización de Almacenamiento
+Se estableció una política estricta de eficiencia para el almacenamiento de logs y métricas. Las series temporales de Prometheus se ajustaron a un intervalo de *scraping* de 30s para reducir la carga de I/O. Asimismo, se afinaron los endpoints de telemetría para erradicar las trazas de error (404) derivadas de escaneos fallidos, protegiendo así la capacidad finita del disco físico en el clúster Proxmox frente a la acumulación de ruido.
+
+## 2. Lecciones Aprendidas y Resolución de Incidencias Técnicas
+
+### A. Validación Asíncrona del Plugin de Loki
+- **Problema:** El constructor del plugin `loki-docker-driver` bloqueaba el arranque del contenedor de prueba si no detectaba el parámetro `loki-url`, impidiendo validar su instalación antes de levantar el stack completo.
+- **Solución:** Se engañó al validador inyectando una URL fantasma en localhost combinada con el parámetro `mode=non-blocking`, permitiendo confirmar la integración del plugin en el host sin dependencias vivas.
+
+### B. La Trampa de los Volúmenes Bind (`prometheus.yml`)
+- **Problema:** Al levantar el stack sin que el archivo físico `prometheus.yml` existiera previamente, el demonio de Docker asumió por defecto la creación de un **directorio** vacío con ese nombre, lo que provocó un fallo de montaje en el contenedor ("Are you trying to mount a directory onto a file?"). 
+- **Solución:** Destrucción manual del falso directorio, creación del archivo físico real con la extensión correcta (`.yml` frente a `.yaml` que generaba conflictos) e inicialización limpia.
+
+### C. Guerra de Permisos y *Reboot Loops* (UIDs)
+- **Problema:** Grafana, Prometheus y Loki entraron en un bucle de reinicios por fallos de escritura (`permission denied`). La causa raíz fue la creación de los volúmenes `./data/*` por el usuario del host (root/usuario local), bloqueando a los usuarios internos no privilegiados de las imágenes oficiales.
+- **Solución:** Se transfirió recursivamente la propiedad de las carpetas locales en el host mediante comandos `chown` a los identificadores exactos de cada servicio: `472` para Grafana, `65534` (nobody) para Prometheus, y `10001` para Loki.
+
+### D. Cascada de Ruido (404s y Redirecciones 307 de FastAPI)
+- **Problema:** Loki se estaba llenando masivamente de trazas de error (HTTP 404). Prometheus estaba escaneando continuamente la ruta `/metrics` de LiteLLM, el cual no tenía activado el módulo. Tras activarlo mediante `callbacks: ["prometheus"]`, el sistema empezó a arrojar códigos `307 Temporary Redirect` antes de los `200 OK`.
+- **Solución:** Se habilitó el callback en el proxy de LiteLLM. Para evitar la penalización de latencia y el ruido del código 307, se normalizó el *scrape path* en `prometheus.yml` forzando la barra final (`/metrics/`), alineándose con el enrutamiento estricto del servidor Starlette/FastAPI subyacente.
