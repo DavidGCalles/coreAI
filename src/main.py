@@ -1,77 +1,109 @@
+import asyncio
 import logging
-from fastapi import FastAPI, Request
-from starlette.middleware.cors import CORSMiddleware
-from mcp.server import Server
-from mcp.server.sse import SseServerTransport
+import sys
+import traceback
 
-from src.mcp.tools.vector_tools import register_vector_tools, register_vector_resources
+from mcp.server import Server, InitializationOptions
+import mcp.types as types
+from mcp.server.stdio import stdio_server
+from mcp.server.context import ServerRequestContext
+
 from src.managers.config_manager import config_manager
 from src.logging_config import configure_logging
+from src.mcp.tools.task_tools import get_task_tools, handle_task_tool
 
-# 1. Inicialización y Configuración
+from pydantic import BaseModel, ConfigDict
+from typing import Any
+
+# 1. Inicialización 
+# (logging_config.py usa StreamHandler que escribe en stderr por defecto, 
+# VITAL para no corromper el protocolo JSON-RPC que viaja por stdout)
 configure_logging(level=config_manager.get_app_config()["log_level"])
 logger = logging.getLogger("coreai-mcp")
 
-# 2. Instancia del Servidor MCP (El Cerebro)
 mcp_server = Server("coreai-mcp")
 
-# Inyectamos las herramientas vectoriales que hemos purgado
-register_vector_tools(mcp_server)
-register_vector_resources(mcp_server)
+# =====================================================================
+# 2. REGISTRO ESTRICTO (El Router Real y Definitivo)
+# =====================================================================
 
-# 3. Transporte SSE (Las Arterias)
-# El endpoint /messages será donde el cliente envíe sus peticiones POST
-sse_transport = SseServerTransport("/messages")
+# Evita el error -32602 del SDK absorbiendo el JSON sin validaciones restrictivas.
+class PassthroughRequest(BaseModel):
+    model_config = ConfigDict(extra='allow')
+    params: dict[str, Any] | None = None
+    name: str | None = None
+    arguments: dict[str, Any] | None = None
 
-# 4. Capa HTTP (La Piel)
-app = FastAPI(
-    title="CoreAI",
-    description="Memory Backend via Model Context Protocol",
-    version="1.0.0"
-)
+async def handle_list_tools(
+    ctx: ServerRequestContext, 
+    request: PassthroughRequest
+) -> types.ListToolsResult:
+    """Devuelve las herramientas delegando en el registro dinámico."""
+    return types.ListToolsResult(
+        tools=get_task_tools(),
+        nextCursor=None
+    )
 
-# CORS crítico para clientes externos y extensiones de IDE
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+async def handle_call_tool(
+    ctx: ServerRequestContext, 
+    request: PassthroughRequest
+) -> types.CallToolResult:
+    """Ejecuta y formatea la respuesta. Blindado contra excepciones internas."""
+    
+    # Extraemos los datos sea cual sea el nivel de anidación que use el SDK internamente
+    name = request.name or (request.params.get("name") if request.params else None)
+    arguments = request.arguments or (request.params.get("arguments", {}) if request.params else {})
+    
+    try:
+        if name and name.startswith("coreai_dispatch_"):
+            raw_response = await handle_task_tool(name, arguments)
+            text_output = raw_response["content"][0]["text"]
+            is_error = raw_response.get("isError", False)
+            
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=text_output)],
+                isError=is_error
+            )
+                    
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=f"Herramienta desconocida: {name}")],
+            isError=True
+        )
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Fallo interno crítico en coreAI:\n\n{error_trace}")
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=f"Fallo interno crítico en coreAI:\n\n{error_trace}")],
+            isError=True
+        )
 
-@app.get("/sse")
-async def sse_endpoint(request: Request):
-    """
-    Establece la conexión unidireccional de eventos (Server-Sent Events).
-    El cliente se queda escuchando aquí.
-    """
-    async with sse_transport.connect_sse(request.scope, request.receive, request._send) as streams:
-        read_stream, write_stream = streams
-        
-        logger.info("Nueva conexión cliente MCP establecida vía SSE.")
-        
-        # Arrancamos el event loop del servidor para este cliente
+# Registramos las rutas inyectando nuestro modelo permisivo
+mcp_server.add_request_handler("tools/list", PassthroughRequest, handle_list_tools)
+mcp_server.add_request_handler("tools/call", PassthroughRequest, handle_call_tool)
+
+# =====================================================================
+# 3. EL CEREBRO STDIO (Sin red, sin FastAPI)
+# =====================================================================
+async def main():
+    logger.info("Iniciando CoreAI MCP Server vía STDIO...")
+    
+    # stdio_server() secuestra stdin/stdout para hablar directamente con el IDE
+    async with stdio_server() as (read_stream, write_stream):
         await mcp_server.run(
             read_stream,
             write_stream,
-            mcp_server.create_initialization_options()
+            InitializationOptions(
+                server_name="coreai-mcp",
+                server_version="1.0.0",
+                capabilities=types.ServerCapabilities(
+                    tools=types.ToolsCapability(listChanged=False)
+                )
+            )
         )
 
-@app.post("/messages")
-async def messages_endpoint(request: Request):
-    """
-    Recepción de llamadas JSON-RPC.
-    El cliente envía aquí las peticiones de Tools y el servidor responde por el canal /sse.
-    """
-    await sse_transport.handle_post_message(request.scope, request.receive, request._send)
-
-
-# --- Útil para comprobaciones rápidas de despliegue ---
-@app.get("/health")
-async def health_check():
-    return {"status": "operational", "system": "CoreAI MCP Server"}
-
 if __name__ == "__main__":
-    import uvicorn
-    # En producción o docker, esto se lanza vía CLI: uvicorn src.main:app --host 0.0.0.0 --port 8000
-    uvicorn.run("src.main:app", host="0.0.0.0", port=8000, reload=True)
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Servidor MCP detenido manualmente.")
