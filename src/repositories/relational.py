@@ -3,7 +3,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.database import Base
-from src.db.models import Entity, Session, Message, Task, Event, LLMAudit
+from src.db.models import Entity, Session, Message, Task, Event, LLMAudit, TaskStatus
 
 # Definimos una variable de tipo vinculada a nuestra base declarativa de SQLAlchemy
 ModelType = TypeVar("ModelType", bound=Base)
@@ -69,6 +69,51 @@ class MessageRepository(BaseRepository[Message]):
 class TaskRepository(BaseRepository[Task]):
     def __init__(self, session: AsyncSession):
         super().__init__(Task, session)
+    async def claim_next_task(self) -> Task | None:
+        """
+        Fase 1: Busca la tarea más antigua PENDING, la bloquea (SKIP LOCKED),
+        la marca como RUNNING y hace commit atómico.
+        """
+        stmt = (
+            select(Task)
+            .where(Task.status == TaskStatus.PENDING)
+            .order_by(Task.created_at.asc())
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        task = result.scalar_one_or_none()
+
+        if task:
+            task.status = TaskStatus.RUNNING
+            await self.session.commit() 
+            # Gracias a expire_on_commit=False en database.py, 'task' sigue viva aquí
+        else:
+            await self.session.rollback()
+            
+        return task
+
+    async def complete_task(self, task_id: UUID) -> None:
+        """Fase 3 (Éxito): Marca la tarea como COMPLETED."""
+        stmt = select(Task).where(Task.id == task_id)
+        result = await self.session.execute(stmt)
+        task = result.scalar_one()
+        task.status = TaskStatus.COMPLETED
+        await self.session.commit()
+
+    async def fail_task(self, task_id: UUID, error_msg: str) -> None:
+        """Fase 3 (Fallo): Marca la tarea como FAILED y guarda la traza en el JSONB."""
+        stmt = select(Task).where(Task.id == task_id)
+        result = await self.session.execute(stmt)
+        task = result.scalar_one()
+        task.status = TaskStatus.FAILED
+        
+        # Clonamos el payload, inyectamos el error y reasignamos para que SQLAlchemy detecte el cambio
+        payload_copy = dict(task.payload)
+        payload_copy["error_trace"] = error_msg
+        task.payload = payload_copy
+        
+        await self.session.commit()
 
 class EventRepository(BaseRepository[Event]):
     def __init__(self, session: AsyncSession):

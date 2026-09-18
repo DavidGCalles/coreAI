@@ -110,7 +110,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    command: ["tail", "-f", "/dev/null"]
+    command: ["python", "-m", "src.worker"]
     networks:
       - coreai_frontend
       - coreai_backend

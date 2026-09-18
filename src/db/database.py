@@ -8,7 +8,7 @@ from src.managers.config_manager import config_manager
 # pool_size y max_overflow te blindarán cuando los workers asíncronos ataquen en paralelo.
 engine = create_async_engine(
     config_manager.get_postgres_url(),
-    echo=os.getenv("APP_ENV") == "development", # Logueamos las queries solo en dev
+    #echo=os.getenv("APP_ENV") == "development", # Logueamos las queries solo en dev
     pool_size=10,
     max_overflow=20
 )
