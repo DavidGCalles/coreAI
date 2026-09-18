@@ -22,9 +22,9 @@ Antes de configurar el proxy, el motor cognitivo local debe estar levantado y te
 **Contexto**
 Configuración de LiteLLM para actuar como pasarela única, consumiendo la instancia local de Infinity y derivando a APIs externas en caso de fallo.
 **Tareas**
-- [ ] Definir `litellm_config.edge.yaml`: Configurar el modelo apuntando al endpoint interno de Infinity (ej. `http://infinity:7997`).
-- [ ] Configurar reglas de *fallback* explícitas hacia el proveedor externo (Gemini 2.5+ u otro).
-- [ ] **[Testing]** Ejecutar scripts bash (`curl`) contra el puerto de LiteLLM para validar que enruta hacia Infinity. Simular caída de Infinity (parar contenedor) para verificar el *fallback* automático.
+- [x] Definir `litellm_config.edge.yaml`: Configurar el modelo apuntando al endpoint interno de Infinity (ej. `http://infinity:7997`).
+- [x] Configurar reglas de *fallback* explícitas hacia el proveedor externo (Gemini 2.5+ u otro).
+- [x] **[Testing]** Ejecutar scripts bash (`curl`) contra el puerto de LiteLLM para validar que enruta hacia Infinity. Simular caída de Infinity (parar contenedor) para verificar el *fallback* automático.
 **Criterios de Aceptación**
 - LiteLLM unifica la interfaz y aplica el *fallback* correctamente sin devolver errores 500 al cliente en la primera caída.
 
@@ -34,9 +34,9 @@ Configuración de LiteLLM para actuar como pasarela única, consumiendo la insta
 **Contexto**
 Centralizar la comunicación con el proxy LiteLLM desde el backend (FastAPI/Workers).
 **Tareas**
-- [ ] Implementar la clase `LLMClient` (`aiohttp` o `httpx`).
-- [ ] Métodos asíncronos: `generate_embedding` y `generate_completion`.
-- [ ] **[Testing]** Test de integración donde `LLMClient` solicita un embedding a LiteLLM y aserta la estructura de la respuesta.
+- [x] Implementar la clase `LLMClient` (`aiohttp` o `httpx`).
+- [x] Métodos asíncronos: `generate_embedding` y `generate_completion`.
+- [x] **[Testing]** Test de integración donde `LLMClient` solicita un embedding a LiteLLM y aserta la estructura de la respuesta.
 **Criterios de Aceptación**
 - El cliente asíncrono no bloquea el *event loop* y formatea los *payloads* según el estándar esperado por LiteLLM.
 
@@ -46,10 +46,10 @@ Centralizar la comunicación con el proxy LiteLLM desde el backend (FastAPI/Work
 **Contexto**
 Registro transaccional de los costes computacionales.
 **Tareas**
-- [ ] Definir modelo `LLMAudit` en SQLAlchemy: UUID, `model_used`, `prompt_tokens`, `completion_tokens`, `total_tokens`, timestamps.
-- [ ] Aplicar migración Alembic.
-- [ ] Acoplar la inserción en `LLMAudit` dentro de `LLMClient` tras cada respuesta exitosa.
-- [ ] **[Testing]** Test End-to-End: Petición completa que aserte el retorno del payload y la existencia del registro en la tabla `LLMAudit`.
+- [x] Definir modelo `LLMAudit` en SQLAlchemy: UUID, `model_used`, `prompt_tokens`, `completion_tokens`, `total_tokens`, timestamps.
+- [x] Aplicar migración Alembic.
+- [x] Acoplar la inserción en `LLMAudit` dentro de `LLMClient` tras cada respuesta exitosa.
+- [x] **[Testing]** Test End-to-End: Petición completa que aserte el retorno del payload y la existencia del registro en la tabla `LLMAudit`.
 **Criterios de Aceptación**
 - Auditoría persistente y exacta por cada llamada. Test E2E en verde.
 

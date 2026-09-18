@@ -3,14 +3,15 @@ Tests unitarios para handle_vectorize_event (Epic 4 - Issue 4.3)
 
 Aísla exclusivamente la lógica algorítmica del handler sin interactuar con la cola.
 Valida:
-- Extracción estricta y validación de tipos del payload.
+- Extracción de jerarquía relacional (Task -> Session -> Entity) con mocks síncronos/asíncronos.
+- Búsqueda resiliente de claves de contenido.
 - Inyección de dependencias limpia (Qdrant global).
 - Delegación exitosa a HybridMemoryManager.add_memory() mediante kwargs.
 """
 
 import pytest
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.db.models import Task, TaskStatus
 from src.schemas.tasks import TaskType
@@ -24,50 +25,31 @@ from src.workers.task_router import handle_vectorize_event
 
 @pytest.fixture
 def pending_vectorize_task():
-    """Crea una tarea PENDING de vectorización con payload completo."""
-    task_id = uuid.UUID('f47ac10b-58cc-4372-a567-0e02b2c3d479')
-    target_entity_id = uuid.UUID('00000000-0000-0000-0000-000000000001')
-    
-    payload = {
-        "task_type": TaskType.VECTORIZE_EVENT.value,
-        "entity_id": str(target_entity_id),
-        "content": "Memoria determinista y sin bullshit.",
-        "domain": "CONVERSATION",
-        "visibility": "SHARED"
-    }
-    
+    """Crea una tarea PENDING simulando la entrada de un LLM (usando summary_content)."""
     return Task(
-        id=task_id,
-        session_id=uuid.uuid4(),
-        status=TaskStatus.PENDING,
-        payload=payload
-    )
-
-
-@pytest.fixture
-def missing_fields_task():
-    """Crea una tarea sin los campos mínimos vitales."""
-    return Task(
-        id=uuid.uuid4(),
+        id=uuid.UUID('f47ac10b-58cc-4372-a567-0e02b2c3d479'),
+        session_id=uuid.UUID('11111111-1111-1111-1111-111111111111'),
         status=TaskStatus.PENDING,
         payload={
             "task_type": TaskType.VECTORIZE_EVENT.value,
-            "domain": "SYSTEM"
-            # Falta entity_id y content
+            "summary_content": "Memoria determinista y resiliente.",
+            "domain": "SYSTEM",
+            "visibility": "PRIVATE"
         }
     )
 
 
 @pytest.fixture
-def invalid_uuid_task():
-    """Crea una tarea con un UUID corrupto."""
+def missing_content_task():
+    """Crea una tarea cuyo payload no tiene ningún campo de texto válido."""
     return Task(
         id=uuid.uuid4(),
+        session_id=uuid.uuid4(),
         status=TaskStatus.PENDING,
         payload={
             "task_type": TaskType.VECTORIZE_EVENT.value,
-            "entity_id": "esto-no-es-un-uuid",
-            "content": "Test de fallo"
+            "domain": "SYSTEM",
+            "una_clave_inventada": "Esto debería fallar"
         }
     )
 
@@ -77,7 +59,6 @@ def invalid_uuid_task():
 # =====================================================================
 
 @pytest.mark.asyncio
-# Parcheamos las dependencias externas en la ruta exacta donde las importa el handler
 @patch("src.workers.task_router.get_qdrant_client", new_callable=AsyncMock)
 @patch("src.workers.task_router.LLMClient")
 @patch("src.workers.task_router.HybridMemoryManager")
@@ -89,10 +70,20 @@ async def test_handle_vectorize_event_happy_path(
 ):
     """
     Test de comportamiento (Happy Path): 
-    Valida que las dependencias se inyectan correctamente y la tarea se delega al Manager.
+    Valida la extracción relacional superando la trampa asíncrona/síncrona de SQLAlchemy.
     """
     # 1. Setup de los Mocks
     session_mock = AsyncMock()
+    
+    # Simular la query a PostgreSQL: select(Session).where(...)
+    mock_db_session = MagicMock()
+    mock_db_session.entity_id = uuid.UUID('99999999-9999-9999-9999-999999999999')
+    
+    # scalar_one_or_none es síncrono, por lo que usamos MagicMock en lugar de AsyncMock
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_db_session
+    session_mock.execute.return_value = mock_result
+
     mock_manager_instance = AsyncMock()
     mock_manager_class.return_value = mock_manager_instance
     
@@ -100,43 +91,49 @@ async def test_handle_vectorize_event_happy_path(
     await handle_vectorize_event(pending_vectorize_task, session_mock)
     
     # 3. Validaciones
-    # a. Verificamos que se solicitó la conexión global de Qdrant
     mock_get_qdrant.assert_awaited_once()
     
-    # b. Verificamos la llamada exacta al mánager transaccional (con KWARGS)
     mock_manager_instance.add_memory.assert_awaited_once_with(
-        entity_id=uuid.UUID('00000000-0000-0000-0000-000000000001'),
-        domain=DomainType.CONVERSATION,
-        content="Memoria determinista y sin bullshit.",
-        visibility=Visibility.SHARED
+        entity_id=uuid.UUID('99999999-9999-9999-9999-999999999999'),
+        domain=DomainType.SYSTEM,
+        content="Memoria determinista y resiliente.",
+        visibility=Visibility.PRIVATE
     )
 
 
 @pytest.mark.asyncio
-async def test_handle_vectorize_event_raises_on_missing_fields(missing_fields_task):
+async def test_handle_vectorize_event_raises_on_missing_session(pending_vectorize_task):
     """
-    Test de validación temprana: 
-    Falla antes de tocar la base de datos si el payload está incompleto.
+    Test relacional: Si la sesión no existe en la BD, aborta violentamente.
     """
     session_mock = AsyncMock()
     
-    with pytest.raises(ValueError) as exc_info:
-        await handle_vectorize_event(missing_fields_task, session_mock)
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = None
+    session_mock.execute.return_value = mock_result
     
-    assert "Faltan campos esenciales" in str(exc_info.value)
-    assert str(missing_fields_task.id) in str(exc_info.value)
+    with pytest.raises(ValueError) as exc_info:
+        await handle_vectorize_event(pending_vectorize_task, session_mock)
+    
+    assert "Inconsistencia relacional fatal" in str(exc_info.value)
+    assert str(pending_vectorize_task.session_id) in str(exc_info.value)
 
 
 @pytest.mark.asyncio
-async def test_handle_vectorize_event_raises_on_invalid_uuid(invalid_uuid_task):
+async def test_handle_vectorize_event_raises_on_missing_content(missing_content_task):
     """
-    Test de validación de tipos: 
-    Evita que un string corrupto reviente SQLAlchemy más adelante.
+    Test de resiliencia de payload: Si no hay texto, no hay vector.
     """
     session_mock = AsyncMock()
     
-    with pytest.raises(ValueError) as exc_info:
-        await handle_vectorize_event(invalid_uuid_task, session_mock)
+    mock_db_session = MagicMock()
+    mock_db_session.entity_id = uuid.uuid4()
     
-    assert "debe ser un UUID válido" in str(exc_info.value)
-    assert str(invalid_uuid_task.id) in str(exc_info.value)
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_db_session
+    session_mock.execute.return_value = mock_result
+    
+    with pytest.raises(ValueError) as exc_info:
+        await handle_vectorize_event(missing_content_task, session_mock)
+    
+    assert "No se encontró texto para vectorizar" in str(exc_info.value)

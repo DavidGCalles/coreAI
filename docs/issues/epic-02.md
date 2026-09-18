@@ -45,7 +45,7 @@ Aislamiento de la complejidad de las consultas distribuidas a través del patró
 **Tareas**
 - [x] Implementar `RelationalRepository` (CRUD asíncrono sobre `Entity`, `Task`, `Event`).
 - [x] Implementar `VectorRepository` (Upsert/Search sobre Qdrant con control de integridad de UUID).
-- [ ] Implementar método unificado de búsqueda híbrida.
+- [x] Implementar método unificado de búsqueda híbrida.
 - [x] **[Testing]** Crear un test de integración (End-to-End de la capa de datos).
 
 **Criterios de Aceptación**

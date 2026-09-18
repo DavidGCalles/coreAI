@@ -10,7 +10,8 @@ todos los manejadores de tareas.
 import logging
 from typing import Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from src.db.models import Task
+from sqlalchemy import select
+from src.db.models import Task, Session
 from src.db.vector_db import get_qdrant_client
 from src.schemas.tasks import TaskType
 from src.managers.memory_manager import HybridMemoryManager
@@ -74,40 +75,54 @@ async def handle_dummy_test_task(task: Task, session: AsyncSession) -> None:
 async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
     """
     Manejador para tareas de vectorización de eventos.
-    Lee el contenido de la tarea y genera el embedding a través del LLMClient,
-    sincronizándolo en Qdrant.
+    Extrae la relación jerárquica desde Postgres, busca el contenido de forma flexible,
+    y asimila la memoria en el grafo híbrido.
     """
     logger.info("  [Worker] Vectorizando evento para la tarea %s", task.id)
 
-    # =================================================================
-    # FASE 1: Extracción y validación
-    # =================================================================
     payload = task.payload
+
+    # =================================================================
+    # FASE 1: Resolución Relacional (Buscando al dueño real)
+    # =================================================================
+    # El LLM no sabe de UUIDs, así que navegamos el grafo: Task -> Session -> Entity
+    stmt = select(Session).where(Session.id == task.session_id)
+    result = await session.execute(stmt)
+    db_session = result.scalar_one_or_none()
+
+    if not db_session:
+        raise ValueError(
+            f"Inconsistencia relacional fatal: La tarea {task.id} apunta a una "
+            f"sesión inexistente ({task.session_id})."
+        )
     
-    entity_id_str = payload.get("entity_id")
-    content = payload.get("content")
+    entity_id = db_session.entity_id
+
+    # =================================================================
+    # FASE 2: Extracción Resiliente (Protección contra alucinaciones de claves)
+    # =================================================================
+    content = None
+    # Buscamos en una lista de candidatos comunes en lugar de forzar una sola clave
+    for candidate_key in ["content", "summary_content", "text", "data", "detailed_summary"]:
+        if candidate_key in payload and payload[candidate_key]:
+            content = payload[candidate_key]
+            break
+
+    if not content:
+        raise ValueError(
+            f"No se encontró texto para vectorizar. Claves buscadas: "
+            f"content, summary_content, text, data. Payload actual: {payload}"
+        )
+
     domain_str = payload.get("domain", "SYSTEM")
     visibility_str = payload.get("visibility", "PRIVATE")
 
-    if not entity_id_str or not content:
-        raise ValueError(
-            f"Faltan campos esenciales (entity_id, content) en task.payload para tarea {task.id}. "
-            f"Payload actual: {payload}"
-        )
-
-    try:
-        entity_id = uuid.UUID(entity_id_str)
-    except (TypeError, ValueError) as e:
-        raise ValueError(f"entity_id debe ser un UUID válido para tarea {task.id}") from e
-
     # =================================================================
-    # FASE 2: Inyección de Dependencias Limpia
+    # FASE 3: Inyección de Dependencias
     # =================================================================
     try:
-        # Obtenemos la conexión global al motor vectorial
         qdrant_client = await get_qdrant_client()
         
-        # Instanciamos la artillería pesada
         vector_repo = VectorRepository(client=qdrant_client)
         event_repo = EventRepository(session)
         audit_repo = LLMAuditRepository(session)
@@ -122,7 +137,7 @@ async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
         )
 
         # =================================================================
-        # FASE 3: Ejecución Transaccional
+        # FASE 4: Ejecución Transaccional
         # =================================================================
         await memory_manager.add_memory(
             entity_id=entity_id,
@@ -131,12 +146,14 @@ async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
             visibility=Visibility(visibility_str.lower())
         )
 
-        logger.info("  [Worker] Vectorización completada para task %s", task.id)
+        logger.info("  [Worker] Vectorización completada con éxito para task %s", task.id)
 
     except ValueError as validation_error:
-        logger.error("  [Worker] Error de validación en vectorización (Task %s): %s", task.id, validation_error)
+        # Captura de errores de casting de Enums (como lo de las mayúsculas)
+        logger.error("  [Worker] Error de validación interna (Task %s): %s", task.id, validation_error)
         raise
     except Exception as execution_error:
+        # Fallos de red, Qdrant, Postgres o Infinity
         logger.error("  [Worker] Error de ejecución en vectorización (Task %s): %s", task.id, execution_error)
         raise
 
