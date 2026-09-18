@@ -9,6 +9,7 @@ class TaskType(StrEnum):
     INIT_SESSION = "init_session"
     FOLLOW_UP = "follow_up"
     DUMMY_TEST_TASK = "dummy_test_task"
+    VECTORIZE_EVENT = "vectorize_event"
 
 class TaskDispatchRequest(BaseModel):
     """

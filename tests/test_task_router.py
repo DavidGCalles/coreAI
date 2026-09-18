@@ -98,11 +98,12 @@ class TestTaskRegistry:
 
     def test_registry_contains_all_task_types(self):
         """Valida que TASK_REGISTRY tiene entradas para todos los tipos."""
-        assert len(TASK_REGISTRY) == 4
+        assert len(TASK_REGISTRY) == 5
         assert TaskType.EXTRACT_ENTITIES in TASK_REGISTRY
         assert TaskType.INIT_SESSION in TASK_REGISTRY
         assert TaskType.FOLLOW_UP in TASK_REGISTRY
         assert TaskType.DUMMY_TEST_TASK in TASK_REGISTRY
+        assert TaskType.VECTORIZE_EVENT
 
     def test_registry_maps_extract_entities(self):
         """Valida el mapping correcto para extract_entities."""
