@@ -1,15 +1,23 @@
 from pydantic import BaseModel, Field
 from typing import Any
 from uuid import UUID
+from enum import StrEnum
+
+class TaskType(StrEnum):
+    """Catálogo estricto de capacidades del Córtex Asíncrono."""
+    EXTRACT_ENTITIES = "extract_entities"
+    INIT_SESSION = "init_session"
+    FOLLOW_UP = "follow_up"
+    DUMMY_TEST_TASK = "dummy_test_task"
 
 class TaskDispatchRequest(BaseModel):
     """
     Contrato estricto para la ingesta de tareas vía MCP.
     Fuerza al cliente a estructurar su caos antes de tocar la base de datos.
     """
-    task_type: str = Field(
+    task_type: TaskType = Field(
         ..., 
-        description="Identificador del tipo de tarea (ej. 'summarize_document', 'extract_entities')."
+        description="Identificador exacto del tipo de tarea. Solo se aceptan los valores listados."
     )
     task_payload: dict[str, Any] = Field(
         default_factory=dict, 
@@ -25,10 +33,6 @@ class TaskDispatchRequest(BaseModel):
     )
 
 class TaskDispatchResponse(BaseModel):
-    """
-    Contrato de salida.
-    Vital para devolverle al cliente los UUIDs autogenerados durante la vivificación.
-    """
     task_id: UUID
     session_id: UUID
     status: str = "PENDING"

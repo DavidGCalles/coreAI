@@ -7,11 +7,19 @@ from src.repositories.relational import TaskRepository, SessionRepository, Entit
 
 @pytest.fixture
 async def db_session():
-    """Sesión limpia acoplada al event loop de pytest."""
+    """
+    Sesión limpia y blindada.
+    El engine.dispose() final garantiza que asyncpg mate sus tareas de 
+    escucha en segundo plano ANTES de que pytest cierre el event loop.
+    """
     await engine.dispose()
-    async with AsyncSessionLocal() as session:
+    session = AsyncSessionLocal()
+    try:
         yield session
+    finally:
         await session.rollback()
+        await session.close()
+        await engine.dispose()  # La bala de plata contra el RuntimeError
 
 @pytest.fixture
 async def setup_pending_task(db_session):
@@ -40,7 +48,7 @@ async def test_worker_claim_and_complete_lifecycle(db_session, setup_pending_tas
     claimed_task = await repo.claim_next_task()
     assert claimed_task is not None, "El worker no encontró la tarea PENDING."
     
-    # PREVENCIÓN MISSING GREENLET: Extraemos tipos nativos antes del posible rollback
+    # Extracción de tipos nativos para evitar el MissingGreenlet
     claimed_task_id = claimed_task.id
     claimed_status = claimed_task.status.value
 
@@ -48,12 +56,10 @@ async def test_worker_claim_and_complete_lifecycle(db_session, setup_pending_tas
     assert claimed_status == "RUNNING", "La tarea no transitó a RUNNING tras ser reclamada."
 
     # 2. Validación de Cola Vacía (El SKIP LOCKED funciona)
-    # Internamente esto hará un rollback e invalidará los objetos de la sesión
     empty_task = await repo.claim_next_task()
     assert empty_task is None, "El worker reclamó una tarea que ya estaba en RUNNING."
 
     # 3. Fase de Éxito (Complete)
-    # Usamos nuestro UUID primitivo asegurado, no el objeto ORM expirado
     await repo.complete_task(claimed_task_id)
 
     # 4. Verificación final en Base de Datos
@@ -69,7 +75,7 @@ async def test_worker_claim_and_fail_lifecycle(db_session, setup_pending_task):
 
     # 1. Fase de Adquisición (Claim)
     claimed_task = await repo.claim_next_task()
-    claimed_task_id = claimed_task.id # Extracción preventiva
+    claimed_task_id = claimed_task.id 
 
     # 2. Fase de Fallo (Fail)
     error_message = "Explosión termonuclear en el Córtex"

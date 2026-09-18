@@ -99,6 +99,8 @@ class TaskRepository(BaseRepository[Task]):
         result = await self.session.execute(stmt)
         task = result.scalar_one()
         task.status = TaskStatus.COMPLETED
+        # Usamos expire para asegurar que SQLAlchemy sincronice el cambio
+        await self.session.flush()
         await self.session.commit()
 
     async def fail_task(self, task_id: UUID, error_msg: str) -> None:
@@ -108,10 +110,16 @@ class TaskRepository(BaseRepository[Task]):
         task = result.scalar_one()
         task.status = TaskStatus.FAILED
         
-        # Clonamos el payload, inyectamos el error y reasignamos para que SQLAlchemy detecte el cambio
-        payload_copy = dict(task.payload)
-        payload_copy["error_trace"] = error_msg
-        task.payload = payload_copy
+        # Convertimos payload a JSON, añadimos error_trace y volvemos a asignar como dict (SQLAlchemy lo serializa)
+        from sqlalchemy.orm import Mapped
+        if hasattr(task, 'payload') and isinstance(task.payload, dict):
+            payload_copy = dict(task.payload)
+            payload_copy["error_trace"] = error_msg
+            task.payload = payload_copy
+        else:
+            # Fallback: crear nuevo payload si no es un dict
+            payload_copy = {"error_trace": error_msg}
+            task.payload = payload_copy
         
         await self.session.commit()
 
