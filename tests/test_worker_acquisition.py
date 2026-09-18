@@ -1,6 +1,6 @@
 import pytest
 import uuid
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from src.db.database import AsyncSessionLocal, engine
 from src.db.models import Task
 from src.repositories.relational import TaskRepository, SessionRepository, EntityRepository
@@ -8,18 +8,23 @@ from src.repositories.relational import TaskRepository, SessionRepository, Entit
 @pytest.fixture
 async def db_session():
     """
-    Sesión limpia y blindada.
-    El engine.dispose() final garantiza que asyncpg mate sus tareas de 
-    escucha en segundo plano ANTES de que pytest cierre el event loop.
+    Sesión limpia, blindada y que RECOGE SU BASURA.
     """
     await engine.dispose()
     session = AsyncSessionLocal()
     try:
+        # Limpieza previa por si otro test falló catastróficamente
+        await session.execute(delete(Task))
+        await session.commit()
+        
         yield session
     finally:
-        await session.rollback()
+        # Tierra quemada al salir. Cero dummies en tu base de datos de desarrollo.
+        await session.execute(delete(Task))
+        await session.commit()
+        
         await session.close()
-        await engine.dispose()  # La bala de plata contra el RuntimeError
+        await engine.dispose() 
 
 @pytest.fixture
 async def setup_pending_task(db_session):
@@ -48,11 +53,11 @@ async def test_worker_claim_and_complete_lifecycle(db_session, setup_pending_tas
     claimed_task = await repo.claim_next_task()
     assert claimed_task is not None, "El worker no encontró la tarea PENDING."
     
-    # Extracción de tipos nativos para evitar el MissingGreenlet
     claimed_task_id = claimed_task.id
     claimed_status = claimed_task.status.value
 
-    assert claimed_task_id == setup_pending_task, "El ID de la tarea reclamada no coincide."
+    # Ahora sí, tenemos garantías de que reclamamos la que acabamos de crear
+    assert claimed_task_id == setup_pending_task, "El ID de la tarea reclamada no coincide. ¡Hay zombis en la BD!"
     assert claimed_status == "RUNNING", "La tarea no transitó a RUNNING tras ser reclamada."
 
     # 2. Validación de Cola Vacía (El SKIP LOCKED funciona)
@@ -63,6 +68,7 @@ async def test_worker_claim_and_complete_lifecycle(db_session, setup_pending_tas
     await repo.complete_task(claimed_task_id)
 
     # 4. Verificación final en Base de Datos
+    db_session.expunge_all() 
     result = await db_session.execute(select(Task).where(Task.id == setup_pending_task))
     final_task = result.scalar_one()
     
@@ -75,6 +81,10 @@ async def test_worker_claim_and_fail_lifecycle(db_session, setup_pending_task):
 
     # 1. Fase de Adquisición (Claim)
     claimed_task = await repo.claim_next_task()
+    
+    # Assert de seguridad añadido también aquí
+    assert claimed_task.id == setup_pending_task, "El ID no coincide. Fantasmas en la BD."
+    
     claimed_task_id = claimed_task.id 
 
     # 2. Fase de Fallo (Fail)
@@ -82,6 +92,7 @@ async def test_worker_claim_and_fail_lifecycle(db_session, setup_pending_task):
     await repo.fail_task(claimed_task_id, error_message)
 
     # 3. Verificación final en Base de Datos
+    db_session.expunge_all()
     result = await db_session.execute(select(Task).where(Task.id == setup_pending_task))
     final_task = result.scalar_one()
     

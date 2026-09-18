@@ -1,6 +1,6 @@
 from typing import Generic, TypeVar, Type, Optional, Sequence, Any
 from uuid import UUID
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.database import Base
 from src.db.models import Entity, Session, Message, Task, Event, LLMAudit, TaskStatus
@@ -69,58 +69,65 @@ class MessageRepository(BaseRepository[Message]):
 class TaskRepository(BaseRepository[Task]):
     def __init__(self, session: AsyncSession):
         super().__init__(Task, session)
+
     async def claim_next_task(self) -> Task | None:
         """
-        Fase 1: Busca la tarea más antigua PENDING, la bloquea (SKIP LOCKED),
-        la marca como RUNNING y hace commit atómico.
+        Fase 1: Búsqueda y bloqueo atómico.
+        Utiliza UPDATE ... RETURNING con una subquery SKIP LOCKED.
+        Cero ORM, 100% transaccional nativo de PostgreSQL.
         """
-        stmt = (
-            select(Task)
+        subq = (
+            select(Task.id)
             .where(Task.status == TaskStatus.PENDING)
             .order_by(Task.created_at.asc())
             .with_for_update(skip_locked=True)
             .limit(1)
+            .scalar_subquery()
         )
+
+        stmt = (
+            update(Task)
+            .where(Task.id == subq)
+            .values({Task.status: TaskStatus.RUNNING})
+            .returning(Task)
+        )
+        
         result = await self.session.execute(stmt)
         task = result.scalar_one_or_none()
-
-        if task:
-            task.status = TaskStatus.RUNNING
-            await self.session.commit() 
-            # Gracias a expire_on_commit=False en database.py, 'task' sigue viva aquí
-        else:
-            await self.session.rollback()
-            
+        
+        await self.session.commit()
         return task
 
     async def complete_task(self, task_id: UUID) -> None:
-        """Fase 3 (Éxito): Marca la tarea como COMPLETED."""
-        stmt = select(Task).where(Task.id == task_id)
-        result = await self.session.execute(stmt)
-        task = result.scalar_one()
-        task.status = TaskStatus.COMPLETED
-        # Usamos expire para asegurar que SQLAlchemy sincronice el cambio
-        await self.session.flush()
+        """Fase 3 (Éxito): Marca la tarea como COMPLETED atómicamente."""
+        stmt = (
+            update(Task)
+            .where(Task.id == task_id)
+            .values({Task.status: TaskStatus.COMPLETED})
+        )
+        await self.session.execute(stmt)
         await self.session.commit()
 
     async def fail_task(self, task_id: UUID, error_msg: str) -> None:
         """Fase 3 (Fallo): Marca la tarea como FAILED y guarda la traza en el JSONB."""
-        stmt = select(Task).where(Task.id == task_id)
-        result = await self.session.execute(stmt)
-        task = result.scalar_one()
-        task.status = TaskStatus.FAILED
+        # 1. Recuperamos solo el JSONB actual
+        result = await self.session.execute(select(Task.payload).where(Task.id == task_id))
+        current_payload = result.scalar_one_or_none()
         
-        # Convertimos payload a JSON, añadimos error_trace y volvemos a asignar como dict (SQLAlchemy lo serializa)
-        from sqlalchemy.orm import Mapped
-        if hasattr(task, 'payload') and isinstance(task.payload, dict):
-            payload_copy = dict(task.payload)
-            payload_copy["error_trace"] = error_msg
-            task.payload = payload_copy
-        else:
-            # Fallback: crear nuevo payload si no es un dict
-            payload_copy = {"error_trace": error_msg}
-            task.payload = payload_copy
+        # 2. Defensa contra payloads corruptos
+        payload_copy = dict(current_payload) if isinstance(current_payload, dict) else {}
+        payload_copy["error_trace"] = error_msg
         
+        # 3. Update atómico sin tocar el ORM, mapeando columnas de forma explícita
+        stmt = (
+            update(Task)
+            .where(Task.id == task_id)
+            .values({
+                Task.status: TaskStatus.FAILED,
+                Task.payload: payload_copy
+            })
+        )
+        await self.session.execute(stmt)
         await self.session.commit()
 
 class EventRepository(BaseRepository[Event]):
