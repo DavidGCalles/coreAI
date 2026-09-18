@@ -18,7 +18,7 @@ from src.managers.memory_manager import HybridMemoryManager
 from src.db.models import DomainType, Visibility
 
 import uuid
-from src.repositories.relational import EventRepository, LLMAuditRepository
+from src.repositories.relational import EventRepository, LLMAuditRepository, SessionRepository
 from src.repositories.vector import VectorRepository
 from src.managers.memory_manager import HybridMemoryManager
 from src.managers.llm_client import LLMClient
@@ -158,6 +158,79 @@ async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
         raise
 
 
+async def handle_consolidate_memory(task: Task, session: AsyncSession) -> None:
+    """
+    Manejador para tareas de consolidación de memoria.
+    Procesa una ventana temporal del dominio especificado y asimila 
+    la memoria consolidada en el grafo híbrido.
+    """
+    logger.info("  [Worker] Consolidando memoria para la tarea %s", task.id)
+
+    payload = task.payload
+
+    # =================================================================
+    # FASE 1: Validación de Parámetros Esenciales
+    # =================================================================
+    domain_str = payload.get("domain")
+    time_window_str = payload.get("time_window")
+
+    if not domain_str or not time_window_str:
+        raise ValueError(
+            f"Parámetros 'domain' o 'time_window' faltantes en el payload para la tarea {task.id}. "
+            f"Payload actual: {payload}"
+        )
+
+    # =================================================================
+    # FASE 2: Resolución Relacional (Vía Repositorio Puro)
+    # =================================================================
+    session_repo = SessionRepository(session)
+    db_session = await session_repo.get(task.session_id)
+
+    if not db_session:
+        raise ValueError(
+            f"Inconsistencia relacional fatal: La tarea {task.id} apunta a una "
+            f"sesión inexistente ({task.session_id})."
+        )
+    
+    entity_id = db_session.entity_id
+
+    # =================================================================
+    # FASE 3: Inyección de Dependencias
+    # =================================================================
+    try:
+        qdrant_client = await get_qdrant_client()
+        
+        vector_repo = VectorRepository(client=qdrant_client)
+        event_repo = EventRepository(session)
+        audit_repo = LLMAuditRepository(session)
+        llm_client = LLMClient()
+
+        memory_manager = HybridMemoryManager(
+            session=session,
+            relational_repo=event_repo,
+            vector_repo=vector_repo,
+            audit_repo=audit_repo,
+            llm_client=llm_client
+        )
+
+        # =================================================================
+        # FASE 4: Ejecución Transaccional (Orquestador Híbrido)
+        # =================================================================
+        await memory_manager.consolidate_memory(
+            entity_id=entity_id,
+            domain=DomainType(domain_str.lower()),
+            time_window=time_window_str
+        )
+
+        logger.info("  [Worker] Consolidación de memoria completada con éxito para task %s", task.id)
+
+    except ValueError as validation_error:
+        logger.error("  [Worker] Error de validación en consolidación (Task %s): %s", task.id, validation_error)
+        raise
+    except Exception as execution_error:
+        logger.error("  [Worker] Error de ejecución en consolidación (Task %s): %s", task.id, execution_error)
+        raise
+
 # =====================================================================
 # REGISTRO CENTRAL (Diccionario TASK_REGISTRY)
 # =====================================================================
@@ -168,6 +241,7 @@ TASK_REGISTRY: Dict[TaskType, Any] = {
     TaskType.FOLLOW_UP: handle_follow_up,
     TaskType.DUMMY_TEST_TASK: handle_dummy_test_task,
     TaskType.VECTORIZE_EVENT: handle_vectorize_event,
+    TaskType.CONSOLIDATE_MEMORY: handle_consolidate_memory,
 }
 
 

@@ -10,6 +10,7 @@ class TaskType(StrEnum):
     FOLLOW_UP = "follow_up"
     DUMMY_TEST_TASK = "dummy_test_task"
     VECTORIZE_EVENT = "vectorize_event"
+    CONSOLIDATE_MEMORY = "consolidate_memory"
 
 class TaskDispatchRequest(BaseModel):
     """
