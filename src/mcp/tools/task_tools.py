@@ -5,6 +5,7 @@ from src.db.database import AsyncSessionLocal
 from src.repositories.relational import TaskRepository, SessionRepository, EntityRepository
 from src.managers.task_manager import TaskManager
 from src.schemas.tasks import TaskDispatchRequest
+from src.contracts import task_contract_registry
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,22 @@ async def handle_task_tool(name: str, arguments: dict) -> dict:
         except Exception as e:
             logger.error("Payload malformado en dispatch_task: %s", e)
             return {"content": [{"type": "text", "text": f"Error de validación: {str(e)}"}], "isError": True}
+
+        # 1.5 Frontera de contratos (ADR-006-001, #43): sin contrato no hay despacho.
+        #     Un tipo sin contrato NO pasa como dict libre: fallo explícito en la tool call.
+        #     La validación de la forma del payload llega con ADR-006-003 (#44); aquí
+        #     se aplica la regla estructural del registro de contratos.
+        if not task_contract_registry.has_contract(request_data.task_type):
+            contracted = ", ".join(task_contract_registry.list()) or "ninguno"
+            message = (
+                f"El tipo de tarea '{request_data.task_type}' no tiene contrato registrado "
+                f"(ADR-006-001). Sin contrato no hay despacho. "
+                f"Tipos con contrato: {contracted}."
+            )
+            logger.warning(
+                "Dispatch rechazado por falta de contrato: %s", request_data.task_type
+            )
+            return {"content": [{"type": "text", "text": message}], "isError": True}
 
         # 2. Inyección transaccional con sesión efímera
         try:
