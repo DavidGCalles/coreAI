@@ -20,11 +20,19 @@ async def test_mcp_dispatch_task_tool_integration(db_session):
     """
     Valida el contrato de red: simula un payload RPC crudo desde un cliente MCP 
     y aserta el formato de salida estricto.
+    
+    Migración ADR-006-001 (#43): el tracer usaba el stub 'init_session', que ya no
+    es despachable (sin contrato no hay despacho). Usa 'vectorize_event', un tipo
+    con contrato registrado, con un payload conforme a su contrato.
     """
-    # 1. Payload crudo simulando la entrada de un LLM
+    # 1. Payload crudo simulando la entrada de un LLM (contrato de vectorize_event)
     arguments = {
-        "task_type": "init_session",
-        "task_payload": {"context": "Llamada desde cliente externo MCP."}
+        "task_type": "vectorize_event",
+        "task_payload": {
+            "content": "Llamada desde cliente externo MCP.",
+            "domain": "conversation",
+            "visibility": "private"
+        }
     }
     
     # 2. Ejecutar el manejador del Gateway
