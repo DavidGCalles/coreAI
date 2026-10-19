@@ -1,0 +1,142 @@
+"""
+Tests del Registro Central de Contratos de Tarea (ADR-006-001, Issue #43).
+
+Valida:
+- validate() acepta/rechaza payload por tipo (vectorize_event, consolidate_memory)
+- schema() coincide con model_json_schema() del modelo (cero duplicación)
+- list() devuelve el catálogo contratado (stubs excluidos)
+- Negativo de frontera: dispatch de un tipo sin contrato → isError explícito
+  (no silent pass-through); los tipos contratados siguen despachables.
+"""
+
+import pytest
+from pydantic import ValidationError
+
+from src.schemas.tasks import TaskType
+from src.contracts import (
+    task_contract_registry,
+    ContractNotRegisteredError,
+    VectorizeEventPayload,
+    ConsolidateMemoryPayload,
+)
+from src.mcp.tools.task_tools import handle_task_tool
+
+
+class TestRegistryValidateVectorizeEvent:
+    """validate() acepta/rechaza el contrato de vectorize_event."""
+
+    def test_validate_accepts_canonical_payload(self):
+        validated = task_contract_registry.validate(
+            TaskType.VECTORIZE_EVENT, {"content": "Memoria canónica del taller."}
+        )
+        assert validated["content"] == "Memoria canónica del taller."
+
+    def test_validate_normalizes_defaults(self):
+        validated = task_contract_registry.validate(
+            TaskType.VECTORIZE_EVENT, {"content": "x"}
+        )
+        assert validated["domain"] == "system"
+        assert validated["visibility"] == "private"
+
+    def test_validate_accepts_explicit_domain_and_visibility(self):
+        validated = task_contract_registry.validate(
+            TaskType.VECTORIZE_EVENT,
+            {"content": "x", "domain": "conversation", "visibility": "shared"},
+        )
+        assert validated["domain"] == "conversation"
+        assert validated["visibility"] == "shared"
+
+    def test_validate_rejects_missing_content(self):
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.VECTORIZE_EVENT, {"domain": "system"}
+            )
+
+    def test_validate_rejects_empty_content(self):
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(TaskType.VECTORIZE_EVENT, {"content": ""})
+
+    def test_validate_rejects_extra_keys(self):
+        """El contrato canónico mata la extracción resiliente (claves candidatas fantasma)."""
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.VECTORIZE_EVENT,
+                {"content": "x", "summary_content": "clave candidata fantasma"},
+            )
+
+
+class TestRegistryValidateConsolidateMemory:
+    """validate() exige domain y time_window en consolidate_memory."""
+
+    def test_validate_accepts_full_payload(self):
+        validated = task_contract_registry.validate(
+            TaskType.CONSOLIDATE_MEMORY, {"domain": "conversation", "time_window": "7d"}
+        )
+        assert validated == {"domain": "conversation", "time_window": "7d"}
+
+    def test_validate_rejects_missing_domain(self):
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.CONSOLIDATE_MEMORY, {"time_window": "7d"}
+            )
+
+    def test_validate_rejects_missing_time_window(self):
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.CONSOLIDATE_MEMORY, {"domain": "conversation"}
+            )
+
+    def test_validate_rejects_empty_time_window(self):
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.CONSOLIDATE_MEMORY, {"domain": "conversation", "time_window": ""}
+            )
+
+
+class TestRegistrySchemaAndList:
+    """schema() coincide con el modelo; list() devuelve el catálogo contratado."""
+
+    def test_schema_matches_model_json_schema(self):
+        """La misma definición que valida es la que se sirve: cero duplicación."""
+        assert task_contract_registry.schema(TaskType.VECTORIZE_EVENT) == VectorizeEventPayload.model_json_schema()
+        assert task_contract_registry.schema(TaskType.CONSOLIDATE_MEMORY) == ConsolidateMemoryPayload.model_json_schema()
+
+    def test_list_returns_only_contracted_catalog(self):
+        """Solo los dos tipos con lógica real; los stubs no son despachables."""
+        assert set(task_contract_registry.list()) == {"vectorize_event", "consolidate_memory"}
+
+    def test_schema_of_unregistered_type_raises(self):
+        with pytest.raises(ContractNotRegisteredError):
+            task_contract_registry.schema(TaskType.DUMMY_TEST_TASK)
+
+    def test_validate_of_unregistered_type_raises(self):
+        with pytest.raises(ContractNotRegisteredError):
+            task_contract_registry.validate(TaskType.INIT_SESSION, {})
+
+
+class TestDispatchFrontierContracts:
+    """Negativo de frontera (ADR-006-001): sin contrato no hay despacho."""
+
+    @pytest.mark.asyncio
+    async def test_dispatch_stub_type_returns_explicit_error(self):
+        for stub_type in ("init_session", "dummy_test_task", "extract_entities", "follow_up"):
+            response = await handle_task_tool(
+                "coreai_dispatch_task",
+                {"task_type": stub_type, "task_payload": {}},
+            )
+            assert response["isError"] is True, f"{stub_type} pasó la frontera sin contrato"
+            text = response["content"][0]["text"]
+            assert stub_type in text
+            assert "contrato" in text.lower()
+            # El catálogo contratado viaja en el mensaje (autocorrección del agente)
+            assert "vectorize_event" in text
+            assert "consolidate_memory" in text
+
+    def test_contracted_types_are_dispatchable(self):
+        """Los dos tipos con lógica real tienen contrato: la frontera los deja pasar.
+
+        La persistencia E2E de un tipo contratado la valida el test de integración
+        migrado (test_mcp_task_tools) con su limpieza de BD correspondiente.
+        """
+        assert task_contract_registry.has_contract(TaskType.VECTORIZE_EVENT)
+        assert task_contract_registry.has_contract(TaskType.CONSOLIDATE_MEMORY)
