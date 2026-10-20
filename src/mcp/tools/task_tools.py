@@ -12,7 +12,7 @@ from src.contracts import task_contract_registry, contract_uri, CONTRACT_URI_TEM
 logger = logging.getLogger(__name__)
 
 DISPATCH_TOOL_DESCRIPTION = (
-    "Única apertura de ingesta del Córtex Asíncrono (ADR-005): toda escritura "
+    "Única apertura de ingesta del Córtex Asíncrono: toda escritura "
     "mutante del sistema entra como tarea asíncrona por esta tool. Semántica "
     "write-then-read: el dispatch devuelve PENDING con task_id y la consistencia "
     "es eventual — consulta el estado por task_id → done, NUNCA lo infier de una "
@@ -20,8 +20,7 @@ DISPATCH_TOOL_DESCRIPTION = (
     "valida aquí de forma síncrona: si el payload viola el contrato, la llamada "
     "falla con isError y el contrato inline — clase de fallo NO reintentable (no "
     "esperes que reintentar lo arregle; corrige el payload). Catálogo de "
-    "contratos: " + CONTRACT_URI_TEMPLATE + " (resource servido por ADR-006-002; "
-    "hasta entonces el error inline incluye la esquema del contrato)."
+    "contratos: " + CONTRACT_URI_TEMPLATE
 )
 
 def get_task_tools() -> list[Tool]:
@@ -36,9 +35,9 @@ def get_task_tools() -> list[Tool]:
 
 def _format_contract_violation(task_type, error: ValidationError) -> str:
     """
-    Error autónomo de la frontera (ADR-006-003, #44): violaciones formateadas +
-    URI del contrato + esquema compacta inline. Debe bastar para que un agente
-    se autocorriga en-loop sin leer código fuente.
+    Error autónomo de la frontera: violaciones formateadas + URI del contrato +
+    esquema compacta inline. Debe bastar para que un agente se autocorriga
+    en-loop sin leer código fuente.
     """
     violations = []
     for err in error.errors(include_url=False):
@@ -50,13 +49,12 @@ def _format_contract_violation(task_type, error: ValidationError) -> str:
         separators=(",", ":"),
     )
     return (
-        f"El payload viola el contrato de '{task_type}' (ADR-006-003). "
+        f"El payload viola el contrato de '{task_type}'. "
         f"La tarea NO se encoló: cero filas nuevas en tasks y ninguna "
         f"sesión/entidad auto-vivificada para este intento.\n"
         f"Violaciones:\n"
         + "\n".join(violations)
-        + f"\nContrato del tipo: {contract_uri(task_type)} "
-        f"(URI del resource, servida por ADR-006-002; por ahora usa la esquema inline).\n"
+        + f"\nContrato del tipo: {contract_uri(task_type)}. "
         f"Esquema del contrato: {schema_inline}\n"
         f"Corrige el task_payload para cumplir la esquema y reintenta el dispatch."
     )
@@ -76,8 +74,8 @@ async def handle_task_tool(name: str, arguments: dict) -> dict:
         if not task_contract_registry.has_contract(request_data.task_type):
             contracted = ", ".join(task_contract_registry.list()) or "ninguno"
             message = (
-                f"El tipo de tarea '{request_data.task_type}' no tiene contrato registrado "
-                f"(ADR-006-001). Sin contrato no hay despacho. "
+                f"El tipo de tarea '{request_data.task_type}' no tiene contrato registrado. "
+                f"Sin contrato no hay despacho. "
                 f"Tipos con contrato: {contracted}."
             )
             logger.warning(
