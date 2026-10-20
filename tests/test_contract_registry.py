@@ -7,6 +7,8 @@ Valida:
 - list() devuelve el catálogo contratado (stubs excluidos)
 - Negativo de frontera: dispatch de un tipo sin contrato → isError explícito
   (no silent pass-through); los tipos contratados siguen despachables.
+- ADR-006-003 (#44): el loader vive en la clase del contrato y contract_uri()
+  es la única fuente del patrón de URI (placeholder hasta #42).
 """
 
 import pytest
@@ -16,8 +18,10 @@ from src.schemas.tasks import TaskType
 from src.contracts import (
     task_contract_registry,
     ContractNotRegisteredError,
-    VectorizeEventPayload,
+    CONTRACT_URI_TEMPLATE,
     ConsolidateMemoryPayload,
+    VectorizeEventPayload,
+    contract_uri,
 )
 from src.mcp.tools.task_tools import handle_task_tool
 
@@ -140,3 +144,34 @@ class TestDispatchFrontierContracts:
         """
         assert task_contract_registry.has_contract(TaskType.VECTORIZE_EVENT)
         assert task_contract_registry.has_contract(TaskType.CONSOLIDATE_MEMORY)
+
+
+class TestContractLoader:
+    """ADR-006-003 (#44): el loader vive en la clase del contrato, no en la frontera."""
+
+    def test_load_returns_normalized_dict(self):
+        loaded = VectorizeEventPayload.load({"content": "x"})
+        assert loaded == {"content": "x", "domain": "system", "visibility": "private"}
+
+    def test_load_rejects_violating_payload(self):
+        with pytest.raises(ValidationError):
+            VectorizeEventPayload.load({"purpose": "clave inventada"})
+
+    def test_registry_validate_delegates_to_loader(self):
+        """validate() del registro es una delegación fina sobre load() del contrato."""
+        assert task_contract_registry.validate(
+            TaskType.VECTORIZE_EVENT, {"content": "x"}
+        ) == VectorizeEventPayload.load({"content": "x"})
+
+
+class TestContractUri:
+    """contract_uri(): única fuente del patrón de URI (placeholder hasta #42)."""
+
+    def test_uri_accepts_enum_and_string(self):
+        assert contract_uri(TaskType.VECTORIZE_EVENT) == "coreai://contracts/tasks/vectorize_event"
+        assert contract_uri("consolidate_memory") == "coreai://contracts/tasks/consolidate_memory"
+
+    def test_uri_matches_template(self):
+        assert contract_uri(TaskType.CONSOLIDATE_MEMORY) == CONTRACT_URI_TEMPLATE.format(
+            task_type="consolidate_memory"
+        )
