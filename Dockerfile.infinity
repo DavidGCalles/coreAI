@@ -1,6 +1,6 @@
 FROM michaelf34/infinity:latest-cpu
 
-RUN pip install --no-cache-dir sentencepiece protobuf "transformers>=4.33.0" "tokenizers>=0.13.3"
+RUN pip install --no-cache-dir sentencepiece protobuf "transformers==4.51.3" "tokenizers>=0.13.3"
 
 # 1. Configuración de Directorios
 WORKDIR /app
