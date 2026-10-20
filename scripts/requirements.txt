@@ -1,0 +1,28 @@
+# scripts/requirements.txt — entorno de hidratación de prepare_model.py
+# (host de build, ONLINE). NO es el requirements.txt de la app: el de la raíz
+# lo consume el Dockerfile del core-mcp/worker. No mezclar los dos.
+#
+# Prerrequisito aparte: torch (instalar según CPU/GPU del host).
+
+# --- corte de compatibilidad del jina-clip-v2 (ADR-007-001) ---
+# El remote code del jina (jina-clip-implementation, fijado en el Hub) importa
+# clip_loss desde transformers.models.clip.modeling_clip, que se eliminó en el
+# refactor de CLIP de la 4.52. 4.51.3 es la última que carga el modelo
+# (confirmado en HF discussions/52 del jina-clip-v2). Techo en las transitivas
+# clave para que pip no las arrastre a versiones incompatibles.
+transformers==4.51.3
+tokenizers>=0.21,<0.22
+huggingface-hub>=0.30.0,<0.34
+
+# --- modelos del stack ---
+sentence-transformers==3.4.1   # sección 1 (e5); exige transformers>=4.41,<5
+sentencepiece
+protobuf
+
+# --- image embedding (sección 3, ADR-007-001) ---
+Pillow                         # procesadores de imagen (TinyCLIP, jina-clip-v2)
+einops                         # remote code del jina (EVA02)
+timm                           # remote code del jina (EVA02), según su model card
+
+# --- red para la descarga ---
+requests>=2.31

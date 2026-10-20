@@ -1,3 +1,6 @@
+# Requisitos del entorno de hidratación: pip install -r scripts/requirements.txt
+# (torch se instala aparte según CPU/GPU del host).
+
 import os
 from sentence_transformers import SentenceTransformer
 from transformers import AutoModel, AutoModelForSequenceClassification, AutoProcessor, AutoTokenizer
