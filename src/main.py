@@ -34,6 +34,12 @@ class PassthroughRequest(BaseModel):
     name: str | None = None
     arguments: dict[str, Any] | None = None
 
+# El router real delega en el registro dinámico: se enruta por nombre
+# registrado, no por prefijo hardcodeado — así el router queda estable
+# cuando la lista de herramientas crece (BUG-003, #53: coreai_get_task
+# no comparte prefijo con coreai_dispatch_task).
+_REGISTERED_TOOL_NAMES = frozenset(tool.name for tool in get_task_tools())
+
 async def handle_list_tools(
     ctx: ServerRequestContext, 
     request: PassthroughRequest
@@ -55,7 +61,7 @@ async def handle_call_tool(
     arguments = request.arguments or (request.params.get("arguments", {}) if request.params else {})
     
     try:
-        if name and name.startswith("coreai_dispatch_"):
+        if name and name in _REGISTERED_TOOL_NAMES:
             raw_response = await handle_task_tool(name, arguments)
             text_output = raw_response["content"][0]["text"]
             is_error = raw_response.get("isError", False)

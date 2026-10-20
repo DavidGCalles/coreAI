@@ -1,10 +1,10 @@
 import pytest
 import json
 import uuid
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 
 from src.db.database import AsyncSessionLocal, engine
-from src.db.models import Task, Session, Entity
+from src.db.models import Task, Session, Entity, TaskStatus
 from src.mcp.tools.task_tools import handle_task_tool
 from src.contracts import contract_uri
 
@@ -126,4 +126,128 @@ async def test_mcp_dispatch_persists_normalized_payload(db_session):
 
     # Limpieza manual ya que handle_task_tool hace su propio commit
     await db_session.delete(task_in_db)
+    await db_session.commit()
+
+# =====================================================================
+# BUG-003 (#53): coreai_get_task — consulta read-only de estado
+# =====================================================================
+
+@pytest.mark.asyncio
+async def test_mcp_get_task_returns_pending_after_dispatch(db_session):
+    """
+    BUG-003 (#53): dispatch → get_task cierra el bucle write-then-read.
+    El estado consultado es el real de la fila, no una inferencia en memoria.
+    """
+    arguments = {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": "Tarea para validar la consulta de estado."}
+    }
+    dispatch_response = await handle_task_tool("coreai_dispatch_task", arguments)
+    assert dispatch_response["isError"] is False, f"La herramienta devolvió error: {dispatch_response}"
+    task_id = json.loads(dispatch_response["content"][0]["text"])["task_id"]
+
+    response = await handle_task_tool("coreai_get_task", {"task_id": task_id})
+    assert response["isError"] is False, f"La consulta de estado falló: {response}"
+    assert len(response["content"]) == 1
+
+    content = json.loads(response["content"][0]["text"])
+    assert content["task_id"] == task_id
+    assert content["task_type"] == "vectorize_event"
+    assert content["status"] == "PENDING"
+    assert content["error_trace"] is None
+    assert "payload" not in content  # perfil mínimo: el payload crudo no viaja
+
+    # Limpieza manual ya que handle_task_tool hace su propio commit
+    result = await db_session.execute(select(Task).where(Task.id == uuid.UUID(task_id)))
+    await db_session.delete(result.scalar_one())
+    await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_mcp_get_task_exposes_error_trace_on_failed(db_session):
+    """
+    BUG-003 (#53): una FAILED legítima (fallo de ejecución, no de contrato)
+    expone su error_trace. Simulamos lo que el worker deja tras fail_task:
+    status FAILED + error_trace inyectado dentro del JSONB payload.
+    """
+    arguments = {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": "Tarea que simula un fallo del worker."}
+    }
+    dispatch_response = await handle_task_tool("coreai_dispatch_task", arguments)
+    assert dispatch_response["isError"] is False, f"La herramienta devolvió error: {dispatch_response}"
+    task_id = uuid.UUID(json.loads(dispatch_response["content"][0]["text"])["task_id"])
+
+    await db_session.execute(
+        update(Task)
+        .where(Task.id == task_id)
+        .values(
+            status=TaskStatus.FAILED,
+            payload={
+                "task_type": "vectorize_event",
+                "content": "Tarea que simula un fallo del worker.",
+                "error_trace": "KeyError: 'session' en route_task",
+            },
+        )
+    )
+    await db_session.commit()
+
+    response = await handle_task_tool("coreai_get_task", {"task_id": str(task_id)})
+    assert response["isError"] is False, f"La consulta de estado falló: {response}"
+
+    content = json.loads(response["content"][0]["text"])
+    assert content["status"] == "FAILED"
+    assert content["error_trace"] == "KeyError: 'session' en route_task"
+
+    # Limpieza manual
+    task_in_db = await db_session.get(Task, task_id)
+    await db_session.delete(task_in_db)
+    await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_mcp_get_task_unknown_id_is_explicit_error(db_session):
+    """
+    BUG-003 (#53): un task_id inexistente es un error explícito con isError,
+    no una respuesta vacía ni una fila inventada. Cero mutación colateral.
+    """
+    ghost_id = uuid.uuid4()
+    before = await _row_counts(db_session)
+
+    response = await handle_task_tool("coreai_get_task", {"task_id": str(ghost_id)})
+
+    assert response["isError"] is True, "Un UUID fantasma debe ser error explícito"
+    assert str(ghost_id) in response["content"][0]["text"]
+
+    after = await _row_counts(db_session)
+    assert after == before, f"La consulta mutó la BD: antes {before}, después {after}"
+
+@pytest.mark.asyncio
+async def test_mcp_get_task_does_not_mutate_the_row(db_session):
+    """
+    BUG-003 (#53): read-only estricto — dos consultas seguidas no tocan
+    ni el estado ni el payload de la fila.
+    """
+    arguments = {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": "Tarea que no debe mutar por una consulta."}
+    }
+    dispatch_response = await handle_task_tool("coreai_dispatch_task", arguments)
+    assert dispatch_response["isError"] is False, f"La herramienta devolvió error: {dispatch_response}"
+    task_id = uuid.UUID(json.loads(dispatch_response["content"][0]["text"])["task_id"])
+
+    result = await db_session.execute(select(Task).where(Task.id == task_id))
+    task_before = result.scalar_one()
+    payload_before = dict(task_before.payload)
+
+    for _ in range(2):
+        response = await handle_task_tool("coreai_get_task", {"task_id": str(task_id)})
+        assert response["isError"] is False, f"La consulta de estado falló: {response}"
+
+    # Releemos desde BD (refresh salta la caché de identidad de la sesión)
+    await db_session.refresh(task_before)
+    assert task_before.status == TaskStatus.PENDING
+    assert task_before.payload == payload_before
+    assert "error_trace" not in task_before.payload
+
+    # Limpieza manual
+    await db_session.delete(task_before)
     await db_session.commit()
