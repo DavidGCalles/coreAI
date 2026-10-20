@@ -69,7 +69,7 @@ services:
       - .env
     ports:
       - "8080:8080"
-    command: ["--model-id", "/data/model", "--model-id", "/data/nli_model"]
+    command: ["--model-id", "/data/model", "--model-id", "/data/nli_model", "--model-id", "/data/tinyclip_model"]
     networks:
       - coreai_backend
     logging: *loki-logging

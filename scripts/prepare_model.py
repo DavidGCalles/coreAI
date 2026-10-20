@@ -1,7 +1,6 @@
-
 import os
 from sentence_transformers import SentenceTransformer
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModel, AutoModelForSequenceClassification, AutoProcessor, AutoTokenizer
 
 # -----------------------------------------------------------------------------
 # 1. EMBEDDING MODEL (SentenceTransformer)
@@ -50,3 +49,28 @@ print(f"💾 Saving NLI model to '{nli_output_path}'...")
 tokenizer.save_pretrained(nli_output_path)
 model_nli.save_pretrained(nli_output_path)
 print("✅ NLI model saved.")
+
+# -----------------------------------------------------------------------------
+# 3. IMAGE EMBEDDING (ADR-007-001) — canario + candidato
+# -----------------------------------------------------------------------------
+# Canario: TinyCLIP (CLIPModel nativo de transformers, 8M params, riesgo cero).
+# Candidato: jina-clip-v2 (licencia cc-by-nc-4.0 — valla comercial diferida,
+# decisión de David). Requiere trust_remote_code=True: el save_pretrained
+# copia los .py de modelado propios de Jina al directorio local.
+# Fallback si Infinity se atraganta con el remote code: google/siglip2-base-patch16-256.
+for image_model_name, image_output_path in [
+    ("wkcn/TinyCLIP-ViT-8M-16-Text-3M-YFCC15M", "models/tinyclip"),
+    ("jinaai/jina-clip-v2", "models/jina-clip-v2"),
+]:
+    os.makedirs(image_output_path, exist_ok=True)
+
+    print(f"🚀 Loading image embedding model '{image_model_name}' (Online)...")
+    image_model = AutoModel.from_pretrained(image_model_name, trust_remote_code=True)
+    image_tokenizer = AutoTokenizer.from_pretrained(image_model_name, trust_remote_code=True)
+    image_processor = AutoProcessor.from_pretrained(image_model_name, trust_remote_code=True)
+
+    print(f"💾 Saving image embedding model to '{image_output_path}'...")
+    image_model.save_pretrained(image_output_path)
+    image_tokenizer.save_pretrained(image_output_path)
+    image_processor.save_pretrained(image_output_path)
+    print(f"✅ Image embedding model saved to '{image_output_path}'.")
