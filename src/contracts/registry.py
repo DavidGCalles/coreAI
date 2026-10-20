@@ -1,27 +1,11 @@
 """
-Registro Central de Contratos de Tarea (Task Contract Registry) — ADR-006-001 (#43).
+Registro Central de Contratos de Tarea — ADR-006-001 (#43).
 
-Única fuente de verdad de los contratos de payload por TaskType (ADR-006,
-`docs/adr/006-mcp-contracts.md`). Sirve tres superficies desde el mismo objeto:
+Única fuente de verdad de los contratos de payload por TaskType. Superficies:
+validate() (delega en el load() del contrato), schema(), list(), contract_uri().
+Regla estructural: ningún tipo es despachable sin contrato registrado.
 
-    validate(task_type, payload) -> dict      validación/normalización del payload
-    schema(task_type)           -> dict       JSON Schema servido como MCP resource
-    list()                      -> list[str]  catálogo de tipos contratados
-
-Regla estructural: NINGÚN tipo es despachable sin contrato registrado. La
-frontera del dispatch (`coreai_dispatch_task`) rechaza explícitamente los tipos
-sin contrato (error isError, no dict libre). La validación de la FORMA del
-payload dentro de la tool call llega con ADR-006-003 (#44); este registro ya
-expone `validate()` para servir a esa frontera desde el mismo objeto que
-expondrá los resources de ADR-006-002 (#42) — cero duplicación entre lo que el
-cliente lee y lo que el servidor aplica.
-
-Costura con el futuro registro de catálogos abiertos (interfaz documentada, sin
-decidir apertura): el registro de catálogos abiertos NO reemplaza a este módulo,
-lo alimenta. El alta de un nuevo TaskType en aquel registro será la señal para
-`register()` aquí — un tipo sin contrato sigue sin siendo despachable. El
-catálogo cerrado actual (`src.schemas.tasks.TaskType`) es por ahora el único
-proveedor de claves de este registro.
+Racional y decisiones: ADR-006 (docs/adr/006-mcp-contracts.md) y PR #52.
 """
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -30,14 +14,36 @@ from typing import Any
 from src.schemas.tasks import TaskType
 from src.schemas.memory import DomainType, Visibility
 
+CONTRACT_URI_TEMPLATE = "coreai://contracts/tasks/{task_type}"
+
+
+def contract_uri(task_type: "TaskType | str") -> str:
+    """URI del resource del contrato (ADR-006-002)."""
+    value = task_type.value if isinstance(task_type, TaskType) else str(task_type)
+    return CONTRACT_URI_TEMPLATE.format(task_type=value)
+
 
 class ContractNotRegisteredError(Exception):
-    """Señal explícita: el TaskType solicitado no tiene contrato en el registro."""
+    """El TaskType solicitado no tiene contrato en el registro."""
 
 
-class VectorizeEventPayload(BaseModel):
-    """Contrato formal de `vectorize_event` — semántica actual del handler (Issue 4.3)."""
+class TaskPayloadContract(BaseModel):
+    """Base de los contratos de payload de tarea (ADR-006): valida y normaliza."""
+
     model_config = ConfigDict(extra="forbid")
+
+    @classmethod
+    def load(cls, payload: dict[str, Any]) -> dict[str, Any]:
+        """Valida un payload crudo y devuelve el dict normalizado (defaults materializados).
+
+        Raises:
+            pydantic.ValidationError: el payload viola el contrato.
+        """
+        return cls.model_validate(payload).model_dump(mode="json")
+
+
+class VectorizeEventPayload(TaskPayloadContract):
+    """Contrato de `vectorize_event` (Issue 4.3)."""
 
     content: str = Field(
         ...,
@@ -54,9 +60,8 @@ class VectorizeEventPayload(BaseModel):
     )
 
 
-class ConsolidateMemoryPayload(BaseModel):
-    """Contrato formal de `consolidate_memory` — en línea con su handler."""
-    model_config = ConfigDict(extra="forbid")
+class ConsolidateMemoryPayload(TaskPayloadContract):
+    """Contrato de `consolidate_memory`."""
 
     domain: DomainType = Field(
         ...,
@@ -70,46 +75,37 @@ class ConsolidateMemoryPayload(BaseModel):
 
 
 class TaskContractRegistry:
-    """
-    Fuente única de verdad de los contratos de tarea.
-
-    La misma definición que valida en runtime es la que se sirve como schema:
-    cero duplicación entre lo que el cliente descubre (ADR-006-002) y lo que la
-    frontera aplica (ADR-006-003).
-    """
+    """Fuente única de verdad de los contratos de tarea."""
 
     def __init__(self) -> None:
-        self._contracts: dict[TaskType, type[BaseModel]] = {}
+        self._contracts: dict[TaskType, type[TaskPayloadContract]] = {}
 
-    def register(self, task_type: TaskType, contract: type[BaseModel]) -> None:
-        """Da de alta el contrato de un TaskType. Reemplaza si ya existía (idempotente)."""
+    def register(self, task_type: TaskType, contract: type[TaskPayloadContract]) -> None:
+        """Da de alta el contrato de un TaskType (idempotente)."""
         self._contracts[task_type] = contract
 
     def has_contract(self, task_type: TaskType) -> bool:
-        """Indica si el tipo es despachable (tiene contrato registrado)."""
+        """Indica si el tipo tiene contrato registrado (despachable)."""
         return task_type in self._contracts
 
     def validate(self, task_type: TaskType, payload: dict[str, Any]) -> dict[str, Any]:
-        """
-        Valida y normaliza el payload contra el contrato del tipo.
+        """Valida y normaliza el payload contra el contrato del tipo.
 
         Raises:
-            ContractNotRegisteredError: el tipo no tiene contrato
-                (sin contrato no hay despacho).
-            pydantic.ValidationError: el payload viola el contrato del tipo.
+            ContractNotRegisteredError: el tipo no tiene contrato.
+            pydantic.ValidationError: el payload viola el contrato.
         """
-        contract = self._require(task_type)
-        return contract.model_validate(payload).model_dump(mode="json")
+        return self._require(task_type).load(payload)
 
     def schema(self, task_type: TaskType) -> dict[str, Any]:
-        """JSON Schema del contrato — la misma definición que valida en runtime."""
+        """JSON Schema del contrato."""
         return self._require(task_type).model_json_schema()
 
     def list(self) -> list[str]:
-        """Catálogo de tipos contratados (despachables)."""
+        """Catálogo de tipos contratados."""
         return sorted(task_type.value for task_type in self._contracts)
 
-    def _require(self, task_type: TaskType) -> type[BaseModel]:
+    def _require(self, task_type: TaskType) -> type[TaskPayloadContract]:
         contract = self._contracts.get(task_type)
         if contract is None:
             raise ContractNotRegisteredError(
@@ -122,8 +118,6 @@ class TaskContractRegistry:
 
 task_contract_registry = TaskContractRegistry()
 
-# Altas del tracer: solo los dos tipos con lógica real tienen contrato.
-# Los stubs (dummy_test_task, extract_entities, init_session, follow_up) NO
-# registran contrato: sin contrato no hay despacho — no son superficies reales.
+# Solo los tipos con lógica real registran contrato; los stubs no son despachables.
 task_contract_registry.register(TaskType.VECTORIZE_EVENT, VectorizeEventPayload)
 task_contract_registry.register(TaskType.CONSOLIDATE_MEMORY, ConsolidateMemoryPayload)
