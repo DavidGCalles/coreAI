@@ -2,11 +2,13 @@
 Registro Central de Contratos de Tarea — ADR-006-001 (#43).
 
 Única fuente de verdad de los contratos de payload por TaskType. Superficies:
-validate() (delega en el load() del contrato), schema(), list(), contract_uri().
-Regla estructural: ningún tipo es despachable sin contrato registrado.
+validate() (delega en el load() del contrato), schema(), list(), contract_uri(),
+catalog(). Regla estructural: ningún tipo es despachable sin contrato registrado.
 
 Racional y decisiones: ADR-006 (docs/adr/006-mcp-contracts.md) y PR #52.
 """
+
+import inspect
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Any
@@ -105,6 +107,24 @@ class TaskContractRegistry:
         """Catálogo de tipos contratados."""
         return sorted(task_type.value for task_type in self._contracts)
 
+    def catalog(self) -> list[dict[str, str]]:
+        """Catálogo navegable de contratos (ADR-006-002, #42): tipo, URI y descripción.
+
+        Superficie de descubrimiento: alimenta resources/list y la lectura de
+        la raíz coreai://contracts/tasks. Misma fuente de verdad que validate()
+        y schema(): se construye iterando _contracts, sin duplicación alguna.
+        """
+        entries: list[dict[str, str]] = []
+        for task_type, contract in sorted(self._contracts.items()):
+            entries.append(
+                {
+                    "task_type": task_type.value,
+                    "uri": contract_uri(task_type),
+                    "description": (inspect.getdoc(contract) or "").strip(),
+                }
+            )
+        return entries
+
     def _require(self, task_type: TaskType) -> type[TaskPayloadContract]:
         contract = self._contracts.get(task_type)
         if contract is None:
@@ -120,4 +140,4 @@ task_contract_registry = TaskContractRegistry()
 
 # Solo los tipos con lógica real registran contrato; los stubs no son despachables.
 task_contract_registry.register(TaskType.VECTORIZE_EVENT, VectorizeEventPayload)
-task_contract_registry.register(TaskType.CONSOLIDATE_MEMORY, ConsolidateMemoryPayload)
+task_contract_registry.register(TaskType.CONSOLIDATE_MEMORY, ConsolidateMemoryPayload
