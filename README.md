@@ -12,6 +12,7 @@
 - **Memoria unificada** — PostgreSQL (UUIDs, entidades/eventos/relaciones) es la fuente de verdad; Qdrant contiene vectores derivados: nunca texto sin respaldo relacional.
 - **Ingesta unificada (ADR-005)** — una única apertura de escritura, `coreai_dispatch_task`: las escrituras son eventos que el córtex procesa en asíncrono; la lectura síncrona acotada (`coreai_search_context`, en camino) es la única otra apertura.
 - **Contratos de tarea (ADR-006)** — cada tipo de tarea despachable lleva contrato formal registrado: *sin contrato no hay despacho*.
+- **Memoria multimodal acotada (ADR-007)** — los vectores de imagen viven en colección Qdrant propia con bypass cercado: solo vectores de imagen saltan las tools MCP y cada uno referencia su registro textual; expiry explícito absorbido por la extensión del ADR.
 - **Córtex asíncrono sin broker** — cola de tareas sobre PostgreSQL con `SELECT ... FOR UPDATE SKIP LOCKED`.
 
 ## Arquitectura
@@ -24,16 +25,17 @@ flowchart LR
         PG[("PostgreSQL<br/>fuente de verdad + cola de tareas")]
         WORKER["Worker · Córtex Asíncrono"]
         QDRANT[("Qdrant<br/>vectores derivados")]
-        INFINITY["Infinity · embeddings"]
+        INFINITY["Infinity · embeddings<br/>texto (e5 · NLI) · visión (jina-clip-v2)"]
         LITELLM["Gateway LiteLLM :4000"]
         LLM["LLM local (LM Studio)"]
     end
-    CLIENT -- "tools/call · dispatch / recall" --> MCP
+    CLIENT -- "tools/call · dispatch · consulta de estado" --> MCP
     MCP -- "task PENDING" --> PG
     WORKER -- "claim (SKIP LOCKED)" --> PG
     WORKER -- "evento + memoria" --> PG
-    WORKER -- "embedding" --> INFINITY
+    WORKER -- "embedding (texto · imagen)" --> INFINITY
     WORKER -- "upsert vector" --> QDRANT
+    CLIENT -. "image_embed (reconocimiento — ADR-007)" .-> INFINITY
     WORKER -- "LLM (consolidación)" --> LITELLM
     LITELLM --> LLM
     CLIENT -- "chat (API OpenAI-compatible)" --> LITELLM
@@ -42,9 +44,9 @@ flowchart LR
 | Servicio | Contenedor | Puerto | Función |
 |---|---|---|---|
 | postgres | `coreai_postgres` | 5432 | Fuente de verdad relacional + cola de tareas (`pgvector/pgvector:pg15`) |
-| qdrant | `coreai_qdrant` | 6333 | Memoria vectorial derivada (colecciones por dominio) |
+| qdrant | `coreai_qdrant` | 6333 | Memoria vectorial derivada (colecciones por dominio; colección de imagen propia — ADR-007) |
 | litellm | `coreai_litellm` | 4000 | Gateway OpenAI-compatible: enrutado de modelos, logs y métricas |
-| infinity | `coreai_infinity` | 8080 | Embeddings locales (modelos servidos desde `/data`) |
+| infinity | `coreai_infinity` | 8080 | Embeddings locales servidos desde `/data`: texto (`e5-small`), NLI (DeBERTa-v3) e imagen (`jina-clip-v2`, ADR-007) |
 | core-mcp | `coreai_mcp` | — | Lanzadera: el servidor MCP se spawnea por cliente vía `docker exec -i` (STDIO, sin red) |
 | worker-node | `coreai_worker` | — | Córtex asíncrono: reclama tareas y ejecuta los handlers |
 | adminer | `coreai_adminer` | 8081 | Administración de la base de datos |
@@ -65,7 +67,7 @@ pytest
 
 **Prerrequisitos:**
 - Docker + Docker Compose.
-- Modelos: Infinity sirve embeddings desde `/data` (ver `scripts/prepare_model.py`); el chat apunta al gateway LiteLLM (`:4000`, config en `src/config/litellm_config.edge.yaml`), que enruta hacia tu modelo local.
+- Modelos: Infinity sirve embeddings de texto e imagen desde `/data` (ver `scripts/prepare_model.py` — el kit CLIP de visión lo prepara `scripts/prepare_clip_kit.py`); el chat apunta al gateway LiteLLM (`:4000`, config en `src/config/litellm_config.edge.yaml`), que enruta hacia tu modelo local.
 
 **Conectar un cliente MCP** (ej. Cline, `cline_mcp_settings.json`):
 
@@ -87,6 +89,7 @@ pytest
 | Tool | Estado | Descripción |
 |---|---|---|
 | `coreai_dispatch_task` | ✅ Operativa | Única apertura de escritura: inyecta una tarea asíncrona (contrato del tipo obligatorio — ADR-006) con auto-vivificación de sesión/entidad si no se aportan IDs. |
+| `coreai_get_task` | ✅ Operativa | Consulta read-only del estado de una tarea (`task_id` → status + `error_trace`): la lectura write-then-read de la doctrina ADR-005. Respuesta pelada — el payload crudo nunca viaja. |
 | `coreai_search_context` | 🚧 En camino | Lectura síncrona read-only (ADR-005-002): la única otra apertura del sustrato, para rutas request-response en milisegundos. |
 
 ## Mapa del repositorio
@@ -97,14 +100,14 @@ src/
   contracts/     # Registro central de contratos de tarea (ADR-006-001)
   db/            # SQLAlchemy: modelos, sesiones, repositorios (relacional + vectorial)
   managers/      # TaskManager, HybridMemoryManager, LLMClient, ConfigManager
-  mcp/tools/     # Superficie MCP (coreai_dispatch_task)
+  mcp/tools/     # Superficie MCP (coreai_dispatch_task, coreai_get_task)
   schemas/       # Contratos Pydantic: tasks, memory, llm
   workers/       # Router del córtex: TASK_REGISTRY + handlers por tipo de tarea
   main.py        # Servidor MCP STDIO ("sin red, sin FastAPI")
   worker.py      # Bucle del worker
 docs/            # PRD, vision, moscow, roadmap (es/en) + adr/
 tests/           # Suite pytest (BD de test protegida por cortafuegos en conftest)
-scripts/         # prepare_model, schedulers/crontab
+scripts/         # prepare_model (+ prepare_clip_kit), schedulers/crontab
 ```
 
 > ⚠️ `scripts/db/` es material legacy desincronizado con los modelos actuales — no re-ejecutar contra una base de datos viva.
@@ -121,12 +124,13 @@ scripts/         # prepare_model, schedulers/crontab
 | [002](docs/adr/002-removed-fallbacks.md) | Removed Fallbacks |
 | [003](docs/adr/003-base-observability.md) | Base Observability |
 | [004](docs/adr/004-mcp-tracer-bullet.md) | Tracer Bullet vía MCP (con post-mortem técnico) |
-| 005 | Doctrina de Ingesta Unificada — número reservado; documento pendiente de re-push (contenido en el issue #36) |
+| [005](docs/adr/005-unified-ingestion-doctrine.md) | Doctrina de Ingesta Unificada — escrituras vía event lane; única apertura síncrona read-only (en camino, #37) |
 | [006](docs/adr/006-mcp-contracts.md) | Contratos de Tarea MCP — validación síncrona en la frontera y exposición como resources |
+| [007](docs/adr/007-multimodal-memory.md) | Memoria Multimodal — adopción anticipada y acotada (identificación visual, demo ELIOS) |
 
 ## Estado del proyecto
 
-En desarrollo activo. La línea principal de trabajo es el **Epic 4: Córtex Asíncrono** (issue #26) — motor de eventos relacional sobre la tabla `tasks` — con la doctrina de ingesta unificada (ADR-005) y los contratos de tarea (ADR-006) en ejecución sobre ella, con trazabilidad completa por issues.
+En desarrollo activo. El **Epic 4: Córtex Asíncrono** (issue #26) está en main desde el 21 de octubre — el sustrato expone `coreai_dispatch_task` + `coreai_get_task` (el recall read-only `coreai_search_context` vuelve con [ADR-005-002] #37) — y el epic permanece abierto hasta que aterricen los pospuestos (4.3 #29, 4.4 #30, [ADR-006-002] #42). En paralelo, la memoria multimodal (ADR-007) está en ejecución: `jina-clip-v2` ya sirve image embeddings en el edge.
 
 ---
 
