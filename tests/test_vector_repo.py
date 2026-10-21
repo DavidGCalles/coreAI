@@ -23,7 +23,7 @@ async def vector_setup():
         await client.create_collection(
             collection_name=test_domain.value,
             vectors_config=qmodels.VectorParams(
-                size=4,
+                size=384,
                 distance=qmodels.Distance.COSINE
             )
         )
@@ -39,7 +39,7 @@ async def test_vector_repository_lifecycle(vector_setup):
     repo, domain = vector_setup
     
     test_uuid = uuid.uuid4()
-    test_vector = [0.1, 0.2, 0.3, 0.4]
+    test_vector = [0.1] * 384
     test_tenant = f"tenant_test_{uuid.uuid4()}"
     
     payload = {
