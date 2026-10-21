@@ -1,6 +1,6 @@
 FROM michaelf34/infinity:latest-cpu
 
-RUN pip install --no-cache-dir sentencepiece protobuf "transformers>=4.33.0" "tokenizers>=0.13.3"
+RUN pip install --no-cache-dir sentencepiece protobuf "transformers==4.51.3" "tokenizers>=0.13.3"
 
 # 1. Configuración de Directorios
 WORKDIR /app
@@ -11,8 +11,15 @@ COPY models/e5-small-sanitized /data/model
 # 2.b. Copiamos el modelo NLI hidratado.
 COPY models/nli-model /data/nli_model
 
+# 2.c. Copiamos los modelos de image embedding (ADR-007-001):
+# canario TinyCLIP + candidato jina-clip-v2 (el swap es solo cambiar
+# el --model-id del compose, sin rebuild).
+COPY models/tinyclip /data/tinyclip_model
+COPY models/jina-clip-v2 /data/clip_model
+COPY hf-modules/ /app/.cache/huggingface/modules/
+
 # 3. Permisos
-RUN chmod -R 777 /data/model /data/nli_model
+RUN chmod -R 777 /data/model /data/nli_model /data/tinyclip_model /data/clip_model
 
 # 4. MODO OFFLINE - Evita que el contenedor intente conectar a HuggingFace
 ENV HF_HUB_OFFLINE=1
