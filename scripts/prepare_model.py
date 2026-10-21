@@ -71,9 +71,10 @@ else:
 # -----------------------------------------------------------------------------
 # Canario: TinyCLIP (CLIPModel nativo de transformers, 8M params, riesgo cero).
 # Candidato: jina-clip-v2 (licencia cc-by-nc-4.0 — valla comercial diferida,
-# decisión de David). Requiere trust_remote_code=True: el save_pretrained
-# copia los .py de modelado propios de Jina al directorio local.
-# Fallback si Infinity se atraganta con el remote code: google/siglip2-base-patch16-256.
+# decisión de David). Requiere trust_remote_code=True. OJO: save_pretrained
+# NO copia los .py del remote code al kit — esa cirugía la hace
+# prepare_clip_kit.py (sección 3b: auto_map relativo + text tower + hf-modules).
+# El fallback siglip2 quedó descartado: la Infinity 0.0.78 no lo sirve como vision engine.
 for image_model_name, image_output_path in [
     ("wkcn/TinyCLIP-ViT-8M-16-Text-3M-YFCC15M", "models/tinyclip"),
     ("jinaai/jina-clip-v2", "models/jina-clip-v2"),
@@ -94,3 +95,17 @@ for image_model_name, image_output_path in [
     image_tokenizer.save_pretrained(image_output_path)
     image_processor.save_pretrained(image_output_path)
     print(f"✅ Image embedding model saved to '{image_output_path}'.")
+
+# -----------------------------------------------------------------------------
+# 3b. CIRUGÍA DEL KIT CLIP (ADR-007-001) — kit self-contained para offline
+# -----------------------------------------------------------------------------
+# prepare_clip_kit.py trae los .py del remote code, hornea el text tower y
+# regenera hf-modules/ (caché de módulos de transformers que el Dockerfile
+# hornea en la imagen). Idempotente; --force rehace la cirugía.
+import subprocess
+import sys
+
+_kit_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prepare_clip_kit.py")
+_rc = subprocess.run([sys.executable, _kit_script]).returncode
+if _rc != 0:
+    raise SystemExit(_rc)
