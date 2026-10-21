@@ -1,0 +1,609 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["coreai", "litellm", "tokens"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "DS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "type": "datasource"
+      },
+      {
+        "current": { "value": "0.70" },
+        "hide": 2,
+        "label": "€/1M tokens input (precio externo)",
+        "name": "precio_input",
+        "options": [],
+        "query": "0.70",
+        "type": "constant"
+      },
+      {
+        "current": { "value": "3.50" },
+        "hide": 2,
+        "label": "€/1M tokens output (precio externo)",
+        "name": "precio_output",
+        "options": [],
+        "query": "3.50",
+        "type": "constant"
+      }
+    ]
+  },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "coreAI · Tokens",
+  "uid": "coreai-tokens",
+  "version": 3,
+  "weekStart": "",
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Tokens totales (rango)",
+      "datasource": { "type": "prometheus", "uid": "${DS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "decimals": 0 },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justify": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum(increase(litellm_total_tokens_metric_total[$__range]))",
+          "legendFormat": "tokens",
+          "range": false,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Tokens input (prompt)",
+      "datasource": { "type": "prometheus", "uid": "${DS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "blue" } },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justify": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum(increase(litellm_input_tokens_metric_total[$__range]))",
+          "legendFormat": "input",
+          "range": false,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Tokens output (completion)",
+      "datasource": { "type": "prometheus", "uid": "${DS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "green" } },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justify": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum(increase(litellm_output_tokens_metric_total[$__range]))",
+          "legendFormat": "output",
+          "range": false,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Requests LLM",
+      "datasource": { "type": "prometheus", "uid": "${DS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "decimals": 0 },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justify": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum(increase(litellm_proxy_total_requests_metric_total[$__range]))",
+          "legendFormat": "requests",
+          "range": false,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Gasto externo (fallback)",
+      "description": "Local-first = 0 €. Cualquier valor distinto de 0 significa que el fallback a API externa se activó. Nota: litellm_spend_metric_total está en USD.",
+      "datasource": { "type": "prometheus", "uid": "${DS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyEUR",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.001 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justify": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum(increase(litellm_spend_metric_total[$__range]))",
+          "legendFormat": "gasto",
+          "range": false,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Ahorro estimado (rango)",
+      "description": "Tokens procesados local × precio externo (variables precio_input / precio_output, €/1M, definidas en el JSON). Defaults ≈ Gemini 3.8 Flash en € (tarifa que sube el 1 enero 2027). Ojo: el gasto litellm_spend está en USD y los precios en € — es una celebración, no un dato auditable 😄",
+      "datasource": { "type": "prometheus", "uid": "${DS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "currencyEUR", "decimals": 2, "color": { "mode": "fixed", "fixedColor": "yellow" } },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justify": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "(sum(increase(litellm_input_tokens_metric_total[$__range])) / 1e6 * ${precio_input}) + (sum(increase(litellm_output_tokens_metric_total[$__range])) / 1e6 * ${precio_output}) - sum(increase(litellm_spend_metric_total[$__range]))",
+          "legendFormat": "ahorro",
+          "range": false,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Tokens por minuto · input vs output (por modelo)",
+      "datasource": { "type": "prometheus", "uid": "${DS}" },
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "tokens/min",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "normal" },
+            "thresholdsStyle": { "mode": "off" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum by (requested_model) (rate(litellm_input_tokens_metric_total[$__rate_interval])) * 60",
+          "legendFormat": "{{requested_model}} · in",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum by (requested_model) (rate(litellm_output_tokens_metric_total[$__rate_interval])) * 60",
+          "legendFormat": "{{requested_model}} · out",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "piechart",
+      "title": "Local-first ratio · requests por modelo",
+      "description": "Porcentaje de requests servidas por cada modelo (LM Studio local vs fallback externo). El panel que mide la tesis del proyecto.",
+      "datasource": { "type": "prometheus", "uid": "${DS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 4 },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "options": {
+        "displayLabels": ["name", "percent"],
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true, "values": [] },
+        "pieType": "pie",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum by (requested_model) (increase(litellm_proxy_total_requests_metric_total[$__range]))",
+          "legendFormat": "{{requested_model}}",
+          "range": false,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Fallos por minuto (por modelo)",
+      "datasource": { "type": "prometheus", "uid": "${DS}" },
+      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 12 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum by (requested_model) (rate(litellm_proxy_failed_requests_metric_total[$__rate_interval])) * 60",
+          "legendFormat": "{{requested_model}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Gasto externo por hora (por modelo)",
+      "description": "Plano (0 €/h) mientras todo se sirva local. Picos = llamadas al fallback externo. Nota: litellm_spend_metric_total está en USD.",
+      "datasource": { "type": "prometheus", "uid": "${DS}" },
+      "gridPos": { "h": 7, "w": 6, "x": 6, "y": 12 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyEUR",
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum by (requested_model) (rate(litellm_spend_metric_total[$__rate_interval])) * 3600",
+          "legendFormat": "{{requested_model}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Ahorro estimado por hora (por modelo)",
+      "description": "Misma fórmula que el stat superior: tokens/hora × precios externos.",
+      "datasource": { "type": "prometheus", "uid": "${DS}" },
+      "gridPos": { "h": 7, "w": 6, "x": 12, "y": 12 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyEUR",
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum by (requested_model) ((rate(litellm_input_tokens_metric_total[$__rate_interval]) / 1e6 * ${precio_input}) + (rate(litellm_output_tokens_metric_total[$__rate_interval]) / 1e6 * ${precio_output})) * 3600",
+          "legendFormat": "{{requested_model}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Embeddings (Infinity) · requests",
+      "description": "Verificado 21 Oct 2026: Infinity NO expone métricas de tokens, así que cuenta requests a /embeddings vía http_requests_total (prometheus-fastapi-instrumentator). Si el panel queda vacío, ejecuta http_requests_total en Explore, mira el label job real y ajusta el regex job=~\".*infinity.*\". Para tokens reales de embeddings, enrutarlas vía LiteLLM.",
+      "datasource": { "type": "prometheus", "uid": "${DS}" },
+      "gridPos": { "h": 7, "w": 6, "x": 18, "y": 12 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "purple" } },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justify": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum(increase(http_requests_total{handler=\"/embeddings\", job=~\".*infinity.*\"}[$__range]))",
+          "legendFormat": "embeddings req",
+          "range": false,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Infinity · embeddings: requests/min y tokens estimados/min",
+      "description": "Tokens est. = http_request_size_bytes_sum / 4 (≈4 bytes por token en texto ES/EN). Aproximación de volumen, no dato auditable.",
+      "datasource": { "type": "prometheus", "uid": "${DS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 19 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "requests/min",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "~tokens/min (est.)" },
+            "properties": [
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "custom.axisLabel", "value": "~tokens/min" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum(rate(http_requests_total{handler=\"/embeddings\", job=~\".*infinity.*\"}[$__rate_interval])) * 60",
+          "legendFormat": "requests/min",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum(rate(http_request_size_bytes_sum{handler=\"/embeddings\", job=~\".*infinity.*\"}[$__rate_interval])) * 60 / 4",
+          "legendFormat": "~tokens/min (est.)",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Infinity · p95 latencia /embeddings",
+      "description": "histogram_quantile sobre http_request_duration_seconds_bucket (handler /embeddings). La latencia de indexado de memoria unificada.",
+      "datasource": { "type": "prometheus", "uid": "${DS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 19 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "p95 (s)",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{handler=\"/embeddings\", job=~\".*infinity.*\"}[$__rate_interval])))",
+          "legendFormat": "p95 /embeddings",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "text",
+      "title": "Notas",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 26 },
+      "datasource": { "type": "datasource", "uid": "-- Grafana --" },
+      "options": {
+        "mode": "markdown",
+        "content": "⚠️ **Solo el chat vía gateway LiteLLM genera estas métricas.** Los dispatch MCP (tools) no producen métricas de tokens — este dashboard mide el **plano de inteligencia**, no el de tools.\n\n💰 **Gasto externo**: local-first = 0 €. Cualquier valor ≠ 0 en «Gasto externo» significa que el fallback a API externa se activó. `litellm_spend_metric_total` está en **USD**; los precios de las variables son € — el «Ahorro» es orientativo.\n\n🧊 **Infinity no expone tokens**: sus `/metrics` solo traen http_requests_total / http_request_size_bytes / latencias (fastapi-instrumentator). El «~tokens/min» de embeddings es una estimación bytes÷4. Para tokens reales de embeddings: enrutarlas vía LiteLLM (pendiente).\n\n🔎 **Nombres de métrica**: verifícalos en Explore con: `count by (__name__) ({__name__=~\"litellm_.*\"})` y `count by (job) (http_requests_total)`. Si falta el label `requested_model`, añádelo con `prometheus_metrics_config → include_labels`.\n\n🛟 **Ahorro estimado**: tokens × precio externo — precios en las variables `precio_input` / `precio_output` (€/1M) del JSON. Para cambiarlas, edita el fichero del repo y `docker compose restart grafana`"
+      },
+      "targets": []
+    }
+  ]
+}

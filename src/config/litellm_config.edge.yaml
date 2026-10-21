@@ -15,6 +15,22 @@ model_list:
       rpm: 1000
       tpm: 1000000
 
+  # BUG-004 (#58): embeddings de IMAGEN por el gateway. LiteLLM trae un
+  # proveedor infinity/ NATIVO (InfinityEmbeddingConfig) que mapea
+  # modality al body del POST /embeddings normal de Infinity 0.0.78
+  # (API v2, verificado en #49: input data URI base64). IMPORTANTE: no
+  # usar custom_llm_provider: openai aquí — el proveedor openai no
+  # soporta modality y lo rechazaría (UnsupportedParamsError). Bonus del
+  # proveedor: dimensions → output_dimension (matryoshka jina-clip-v2
+  # 1024→64) y encoding_format.
+  - model_name: image-embedding
+    litellm_params:
+      model: infinity/data/clip_model
+      api_base: os.environ/EMBEDDING_API_BASE
+      api_key: "infinity-service"
+      rpm: 1000
+      tpm: 1000000
+
   # ==========================================================
   # Local LLM 
   # ==========================================================
@@ -35,6 +51,7 @@ router_settings:
     - "vision-model": ["local-fallback"]
     - "audio-model": ["local-fallback"]
     - "text-embedding": ["data/model"]
+    - "image-embedding": ["data/clip_model"]
   
   allowed_fails: 1
   cooldown_time: 1 
