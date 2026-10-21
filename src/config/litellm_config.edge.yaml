@@ -15,6 +15,23 @@ model_list:
       rpm: 1000
       tpm: 1000000
 
+  # BUG-004 (#58): embeddings de IMAGEN por el gateway. Infinity 0.0.78
+  # sirve imágenes por el /embeddings normal con modality: "image" y el
+  # input como data URI base64 (data:image/png;base64,...) — el mismo
+  # formato multimodal que LiteLLM acepta en /v1/embeddings. Con la
+  # entrada en el model_list, estas llamadas generan métricas litellm_*
+  # (tokens, requests, spend) y encienden el dashboard coreai-tokens.
+  # Nota: litellm_input_tokens_metric_total tokeniza el base64 → cifra
+  # inflada para la modalidad imagen (caveat documentado en #58).
+  - model_name: image-embedding
+    litellm_params:
+      model: data/clip_model
+      custom_llm_provider: openai
+      api_base: os.environ/EMBEDDING_API_BASE
+      api_key: "infinity-service"
+      rpm: 1000
+      tpm: 1000000
+
   # ==========================================================
   # Local LLM 
   # ==========================================================
@@ -35,6 +52,7 @@ router_settings:
     - "vision-model": ["local-fallback"]
     - "audio-model": ["local-fallback"]
     - "text-embedding": ["data/model"]
+    - "image-embedding": ["data/clip_model"]
   
   allowed_fails: 1
   cooldown_time: 1 
