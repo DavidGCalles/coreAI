@@ -11,6 +11,7 @@ from mcp.server.context import ServerRequestContext
 from src.managers.config_manager import config_manager
 from src.logging_config import configure_logging
 from src.mcp.tools.task_tools import get_task_tools, handle_task_tool
+from src.mcp.resources.contract_resources import get_contract_resources, read_contract_resource
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any
@@ -78,15 +79,52 @@ async def handle_call_tool(
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
-        logger.error(f"Fallo interno crítico en coreAI:\n\n{error_trace}")
+        logger.error(f"Fallo interno crítico en coreAI:
+
+{error_trace}")
         return types.CallToolResult(
-            content=[types.TextContent(type="text", text=f"Fallo interno crítico en coreAI:\n\n{error_trace}")],
+            content=[types.TextContent(type="text", text=f"Fallo interno crítico en coreAI:
+
+{error_trace}")],
             isError=True
         )
+
+# =====================================================================
+# 2b. RESOURCES (ADR-006-002, #42): Exposición de Contratos
+# =====================================================================
+# Descubrimiento antes que aplicación. El mismo patrón PassthroughRequest
+# (Caballo de Troya) que tools: si el SDK aplicara a los handlers de resources
+# la validación estricta que causó el -32602 del post-mortem ADR-004, el
+# modelo permisivo absorbe el JSON tal cual y la resolución es nuestra.
+# Todo se sirve desde el registro central (ADR-006-001): lo que lee el
+# cliente es lo que validará el dispatch. La raíz coreai://contracts/tasks
+# es legible como índice — el modelo mental REST del colectivo queda
+# previsto (decisión de David, 21 oct).
+
+async def handle_list_resources(
+    ctx: ServerRequestContext, 
+    request: PassthroughRequest
+) -> types.ListResourcesResult:
+    """Publica el catálogo de contratos: raíz navegable + un resource por tipo."""
+    return types.ListResourcesResult(
+        resources=get_contract_resources(),
+        nextCursor=None
+    )
+
+async def handle_read_resource(
+    ctx: ServerRequestContext, 
+    request: PassthroughRequest
+) -> types.ReadResourceResult:
+    """Resuelve la lectura: raíz → índice del catálogo; template → JSON Schema."""
+    # Extraemos la URI sea cual sea el nivel de anidación que use el SDK internamente
+    uri = getattr(request, "uri", None) or (request.params.get("uri") if request.params else None)
+    return await read_contract_resource(uri)
 
 # Registramos las rutas inyectando nuestro modelo permisivo
 mcp_server.add_request_handler("tools/list", PassthroughRequest, handle_list_tools)
 mcp_server.add_request_handler("tools/call", PassthroughRequest, handle_call_tool)
+mcp_server.add_request_handler("resources/list", PassthroughRequest, handle_list_resources)
+mcp_server.add_request_handler("resources/read", PassthroughRequest, handle_read_resource)
 
 # =====================================================================
 # 3. EL CEREBRO STDIO (Sin red, sin FastAPI)
@@ -103,7 +141,8 @@ async def main():
                 server_name="coreai-mcp",
                 server_version="1.0.0",
                 capabilities=types.ServerCapabilities(
-                    tools=types.ToolsCapability(listChanged=False)
+                    tools=types.ToolsCapability(listChanged=False),
+                    resources=types.ResourcesCapability(listChanged=False)
                 )
             )
         )
