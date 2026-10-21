@@ -9,3 +9,4 @@ tests/__pycache__
 .env
 alembic/*
 alembic.ini
+/hf-modules

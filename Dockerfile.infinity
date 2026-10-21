@@ -16,6 +16,7 @@ COPY models/nli-model /data/nli_model
 # el --model-id del compose, sin rebuild).
 COPY models/tinyclip /data/tinyclip_model
 COPY models/jina-clip-v2 /data/clip_model
+COPY hf-modules/ /app/.cache/huggingface/modules/
 
 # 3. Permisos
 RUN chmod -R 777 /data/model /data/nli_model /data/tinyclip_model /data/clip_model
