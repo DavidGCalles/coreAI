@@ -71,16 +71,10 @@ def _format_contract_violation(task_type, error: ValidationError) -> str:
     return (
         f"El payload viola el contrato de '{task_type}'. "
         f"La tarea NO se encoló: cero filas nuevas en tasks y ninguna "
-        f"sesión/entidad auto-vivificada para este intento.
-"
-        f"Violaciones:
-"
-        + "
-".join(violations)
-        + f"
-Contrato del tipo: {contract_uri(task_type)}. "
-        f"Esquema del contrato: {schema_inline}
-"
+        f"sesión/entidad auto-vivificada para este intento."
+        f"Violaciones:"+ "".join(violations)
+        + f"Contrato del tipo: {contract_uri(task_type)}. "
+        f"Esquema del contrato: {schema_inline}"
         f"Corrige el task_payload para cumplir la esquema y reintenta el dispatch."
     )
 
