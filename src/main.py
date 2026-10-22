@@ -79,13 +79,10 @@ async def handle_call_tool(
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
-        logger.error(f"Fallo interno crítico en coreAI:
-
-{error_trace}")
+        logger.error(f"Fallo interno crítico en coreAI: {error_trace}")
         return types.CallToolResult(
-            content=[types.TextContent(type="text", text=f"Fallo interno crítico en coreAI:
-
-{error_trace}")],
+            content=[types.TextContent(type="text", text=f"Fallo interno crítico en coreAI: \
+                                       {error_trace}")],
             isError=True
         )
 
