@@ -2,6 +2,7 @@ import asyncio
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.database import AsyncSessionLocal
+from src.db.vector_db import ensure_image_collection
 from src.repositories.relational import TaskRepository
 from src.logging_config import configure_logging
 from src.managers.config_manager import config_manager
@@ -14,6 +15,11 @@ INITIAL_BACKOFF = 1.0
 MAX_BACKOFF = 30.0
 
 async def worker_loop():
+    # Init idempotente del almacén vectorial (ADR-007-002 #50): la colección
+    # de imágenes se garantiza ANTES del bucle. Fail-fast al arranque — si
+    # Qdrant no está disponible, el worker no levanta degradado.
+    await ensure_image_collection()
+
     logger.info("Córtex Asíncrono iniciado. A la escucha de tareas...")
     backoff = INITIAL_BACKOFF
     
