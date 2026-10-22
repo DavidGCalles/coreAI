@@ -46,12 +46,15 @@ class TaskPayloadContract(BaseModel):
 
 
 class VectorizeEventPayload(TaskPayloadContract):
-    """Contrato de `vectorize_event` (Issue 4.3)."""
+    """Contrato de `vectorize_event` (Issue 4.3): vectoriza texto = genera su embedding numérico para búsqueda semántica (nada que ver con gráficos vectoriales)."""
 
     content: str = Field(
         ...,
         min_length=1,
-        description="Texto canónico a vectorizar. Clave obligatoria y única de contenido.",
+        description=(
+            "Texto canónico cuyo embedding numérico se generará para búsqueda "
+            "semántica. Clave obligatoria y única de contenido."
+        ),
     )
     project: str | None = Field(
         None,
@@ -87,15 +90,19 @@ class ConsolidateMemoryPayload(TaskPayloadContract):
 
 
 class VectorizeImageEventPayload(TaskPayloadContract):
-    """Contrato de `vectorize_image_event` (ADR-007-003, #61): vector de imagen derivado que referencia el registro textual."""
+    """Contrato de `vectorize_image_event` (ADR-007-003, #61): vectoriza una imagen = genera su embedding numérico para búsqueda semántica (nada que ver con gráficos vectoriales/SVG)."""
 
     image: str = Field(
         ...,
-        min_length=1,
+        pattern=r"^data:image/[a-zA-Z0-9.+-]+;base64,",
         description=(
-            "Imagen a vectorizar: data URI base64 (image/*) o path accesible "
-            "al contenedor worker. La decodificación y legibilidad real de la "
-            "imagen son fallo legítimo del handler (asíncrono), no de contrato."
+            "Imagen EXCLUSIVAMENTE como data URI base64 "
+            "(data:image/*;base64,...). Sin paths: el payload debe ser "
+            "autocontenido y location-independent — qué filesystem lee un "
+            "path lo decide el cliente que ejecuta la request, ambigüedad "
+            "inaceptable en un sistema distribuido. La legibilidad y "
+            "decodificación real de la imagen son fallo legítimo del "
+            "handler (asíncrono), no de contrato."
         ),
     )
     text_event_id: UUID = Field(

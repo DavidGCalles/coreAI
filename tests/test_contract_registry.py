@@ -99,7 +99,7 @@ class TestRegistryValidateConsolidateMemory:
 
 
 class TestRegistryValidateVectorizeImageEvent:
-    """validate() acepta/rechaza el contrato de vectorize_image_event (ADR-007-003, #61)."""
+    """validate() acepta/rechaza el contrato de vectorize_image_event (ADR-007-003, #61; imagen SOLO como data URI — path eliminado por decisión 22 oct)."""
 
     def test_validate_accepts_canonical_payload(self):
         validated = task_contract_registry.validate(
@@ -134,6 +134,28 @@ class TestRegistryValidateVectorizeImageEvent:
         with pytest.raises(ValidationError):
             task_contract_registry.validate(
                 TaskType.VECTORIZE_IMAGE_EVENT, {"image": "data:image/png;base64,aGVsbG8="}
+            )
+
+    def test_validate_rejects_path_instead_of_data_uri(self):
+        """Un path local NO viaja: el payload es autocontenido (sistema distribuido)."""
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.VECTORIZE_IMAGE_EVENT,
+                {
+                    "image": "/home/dev/coreAI/scratch/gatos_coco.jpg",
+                    "text_event_id": "11111111-1111-1111-1111-111111111111",
+                },
+            )
+
+    def test_validate_rejects_malformed_data_uri(self):
+        """data: sin base64 o sin tipo image/* no pasa la frontera de forma."""
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.VECTORIZE_IMAGE_EVENT,
+                {
+                    "image": "data:text/plain;base64,aGVsbG8=",
+                    "text_event_id": "11111111-1111-1111-1111-111111111111",
+                },
             )
 
     def test_validate_rejects_extra_keys(self):
