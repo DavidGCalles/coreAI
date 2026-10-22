@@ -5,6 +5,19 @@ from src.managers.config_manager import config_manager
 
 logger = logging.getLogger(__name__)
 
+
+class GatewayHTTPError(RuntimeError):
+    """
+    El proxy LiteLLM respondió 4xx/5xx.
+
+    httpx.HTTPStatusError solo dice «400 Bad Request for url ...» — el
+    error_trace del worker quedaría ciego a la causa. El CUERPO de la
+    respuesta lleva la causa real (ImageCorruption de Infinity, errores
+    del router, ...): esta excepción la propaga recortada para que el
+    trace sea un diagnóstico, no un código de estado.
+    """
+
+
 class LLMClient:
     """
     Cliente tonto de I/O para comunicarse con el proxy LiteLLM.
@@ -39,8 +52,15 @@ class LLMClient:
                 return EmbeddingResponse.model_validate(response.json())
                 
             except httpx.HTTPStatusError as e:
+                # Trace honesto (#61): el cuerpo del 4xx/5xx del gateway lleva
+                # la causa real; str(e) solo lleva el código de estado. Recorte
+                # a 600 chars: los cuerpos de LiteLLM arrastran ruido de
+                # fallbacks y trazas del router.
                 logger.error(f"Error HTTP del proxy LiteLLM: {e.response.status_code} - {e.response.text}")
-                raise
+                raise GatewayHTTPError(
+                    f"El proxy LiteLLM devolvió {e.response.status_code} para "
+                    f"'{request_data.model}': {e.response.text[:600]}"
+                ) from e
             except httpx.RequestError as e:
                 logger.error(f"Fallo de conexión física con el proxy: {e}")
                 raise

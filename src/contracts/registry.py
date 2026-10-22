@@ -89,19 +89,23 @@ class ConsolidateMemoryPayload(TaskPayloadContract):
 
 
 class VectorizeImageEventPayload(TaskPayloadContract):
-    """Contrato de `vectorize_image_event` (ADR-007-003, #61): vectoriza una imagen = genera su embedding numérico para búsqueda semántica (nada que ver con gráficos vectoriales/SVG). Evento auto-anclado (decisión 22 oct): la tarea de imagen YA es el evento relacional — la correlación con el registro textual de la misma pieza la da la sesión, no una referencia encadenada a otra tarea."""
+    """Contrato de `vectorize_image_event` (ADR-007-003, #61): vectoriza una imagen = genera su embedding numérico para búsqueda semántica (nada que ver con gráficos vectoriales/SVG — raster-only, el SVG rebota en la frontera). Evento auto-anclado (decisión 22 oct): la tarea de imagen YA es el evento relacional — la correlación con el registro textual de la misma pieza la da la sesión, no una referencia encadenada a otra tarea."""
 
     image: str = Field(
         ...,
-        pattern=r"^data:image/[a-zA-Z0-9.+-]+;base64,",
+        pattern=r"^data:image/(?:jpeg|jpg|png|webp|gif|bmp);base64,[A-Za-z0-9+/]+={0,2}$",
         description=(
-            "Imagen EXCLUSIVAMENTE como data URI base64 "
-            "(data:image/*;base64,...). Sin paths: el payload debe ser "
-            "autocontenido y location-independent — qué filesystem lee un "
-            "path lo decide el cliente que ejecuta la request, ambigüedad "
-            "inaceptable en un sistema distribuido. La legibilidad y "
-            "decodificación real de la imagen son fallo legítimo del "
-            "handler (asíncrono), no de contrato."
+            "Imagen EXCLUSIVAMENTE como data URI base64 de un formato RASTER "
+            "decodificable (jpeg|jpg|png|webp|gif|bmp). Los SVG y gráficos "
+            "vectoriales REBOTAN aquí: vectorizar = generar el embedding "
+            "NUMÉRICO para búsqueda semántica, y un SVG no puede producirlo "
+            "(PIL no lo lee y moriría asíncrono en Infinity). Sin paths: el "
+            "payload debe ser autocontenido y location-independent — qué "
+            "filesystem lee un path lo decide el cliente que ejecuta la "
+            "request, ambigüedad inaceptable en un sistema distribuido. El "
+            "cuerpo base64 es alfabeto estricto anclado al final: basura "
+            "tras la coma rebota ANTES de encolarse. La legibilidad real de "
+            "los bytes sí es fallo legítimo del handler (asíncrono)."
         ),
     )
     project: str | None = Field(
