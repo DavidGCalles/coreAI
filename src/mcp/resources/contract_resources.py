@@ -24,7 +24,7 @@ import logging
 import re
 
 import mcp.types as types
-from mcp.shared.exceptions import McpError
+from mcp.shared.exceptions import MCPError
 from mcp.types import Error
 
 from src.contracts import CONTRACT_URI_TEMPLATE, task_contract_registry
@@ -59,9 +59,9 @@ _SCHEMA_DISCLAIMER = (
 )
 
 
-def _resource_not_found(message: str) -> McpError:
+def _resource_not_found(message: str) -> MCPError:
     """Error de protocolo -32002: resource no resoluble por este servidor."""
-    return McpError(error=Error(code=RESOURCE_NOT_FOUND, message=message))
+    return MCPError(error=Error(code=RESOURCE_NOT_FOUND, message=message))
 
 
 def get_contract_resources() -> list[types.Resource]:
@@ -95,7 +95,7 @@ async def read_contract_resource(uri: str | None) -> types.ReadResourceResult:
     """
     uri = (uri or "").strip()
     if not uri:
-        raise McpError(
+        raise MCPError(
             error=Error(
                 code=INVALID_PARAMS,
                 message="resources/read requiere el parámetro 'uri' (string).",
