@@ -140,4 +140,4 @@ task_contract_registry = TaskContractRegistry()
 
 # Solo los tipos con lógica real registran contrato; los stubs no son despachables.
 task_contract_registry.register(TaskType.VECTORIZE_EVENT, VectorizeEventPayload)
-task_contract_registry.register(TaskType.CONSOLIDATE_MEMORY, ConsolidateMemoryPayload
+task_contract_registry.register(TaskType.CONSOLIDATE_MEMORY, ConsolidateMemoryPayload)
