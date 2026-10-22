@@ -62,7 +62,7 @@ async def handle_follow_up(task: Task, session: AsyncSession) -> None:
     Manejador para seguimiento de interaccion.
     Respuesta al usuario tras una tarea anterior.
     
-    TODO: Implementar logica real de follow-up
+    TODO: Implementar logica real de follow_up
     """
     logger.info("  [Worker] Ejecutando follow_up para la tarea %s", task.id)
 
@@ -314,10 +314,16 @@ async def handle_vectorize_image_event(task: Task, session: AsyncSession) -> Non
     except Exception as execution_error:
         # Fallos de red, gateway LiteLLM, Qdrant o Postgres. Cortafuegos del
         # flujo textual: nada a medias queda en la transacción.
+        # OJO (hallazgo E2E 22 oct, #61): el rollback EXPIRA la instancia
+        # task — después de él NO se toca task.* en el handler ni en el
+        # worker: leer un atributo de una instancia expirada dispara un
+        # refresh síncrono que, en contexto async, revienta con
+        # greenlet_spawn y enmascara el error real (la tarea queda
+        # huérfana en RUNNING). El id de la tarea lo registra el worker,
+        # que captura task_id ANTES de ejecutar.
         await session.rollback()
         logger.error(
-            "  [Worker] Error de ejecución en vectorización de imagen (Task %s): %s",
-            task.id,
+            "  [Worker] Error de ejecución en vectorización de imagen: %s",
             execution_error,
         )
         raise
