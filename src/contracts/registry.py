@@ -107,12 +107,16 @@ class TaskContractRegistry:
         """Catálogo de tipos contratados."""
         return sorted(task_type.value for task_type in self._contracts)
 
-    def catalog(self) -> list[dict[str, str]]:
+    def catalog(self) -> "list[dict[str, str]]":
         """Catálogo navegable de contratos (ADR-006-002, #42): tipo, URI y descripción.
 
         Superficie de descubrimiento: alimenta resources/list y la lectura de
         la raíz coreai://contracts/tasks. Misma fuente de verdad que validate()
         y schema(): se construye iterando _contracts, sin duplicación alguna.
+
+        Nota: la anotación va entrecomillada a propósito — en el scope del
+        cuerpo de la clase el nombre 'list' queda sombreado por el método
+        homónimo, y una anotación viva 'list[...]' revienta con TypeError.
         """
         entries: list[dict[str, str]] = []
         for task_type, contract in sorted(self._contracts.items()):
