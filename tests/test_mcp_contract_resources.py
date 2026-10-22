@@ -8,7 +8,7 @@ Valida:
 - resources/read por tipo → JSON Schema == registry.schema() (DoD: lo que lee
   el cliente es lo que validará el dispatch — misma fuente de verdad).
 - Negativos de protocolo: URI fuera del espacio, tipo inexistente y tipo sin
-  contrato → McpError -32002 explícito, no crash ni contenido vacío.
+  contrato → MCPError -32002 explícito, no crash ni contenido vacío.
 
 La comprobación manual en el MCP Inspector (DoD del issue) se documenta en
 el propio issue #42.
@@ -17,7 +17,7 @@ el propio issue #42.
 import json
 import pytest
 
-from mcp.shared.exceptions import McpError
+from mcp.shared.exceptions import MCPError
 
 from src.schemas.tasks import TaskType
 from src.contracts import (
@@ -134,14 +134,14 @@ class TestReadErrors:
 
     @pytest.mark.asyncio
     async def test_uri_outside_contract_namespace(self):
-        with pytest.raises(McpError) as exc_info:
+        with pytest.raises(MCPError) as exc_info:
             await read_contract_resource("coreai://other/thing")
         assert exc_info.value.error.code == -32002
         assert CONTRACTS_ROOT_URI in exc_info.value.error.message
 
     @pytest.mark.asyncio
     async def test_unknown_task_type(self):
-        with pytest.raises(McpError) as exc_info:
+        with pytest.raises(MCPError) as exc_info:
             await read_contract_resource(CONTRACTS_ROOT_URI + "/banana")
         assert exc_info.value.error.code == -32002
         assert "banana" in exc_info.value.error.message
@@ -151,19 +151,19 @@ class TestReadErrors:
     @pytest.mark.asyncio
     async def test_stub_type_without_contract(self):
         """Un TaskType real pero SIN contrato (init_session) también es -32002."""
-        with pytest.raises(McpError) as exc_info:
+        with pytest.raises(MCPError) as exc_info:
             await read_contract_resource(contract_uri(TaskType.INIT_SESSION))
         assert exc_info.value.error.code == -32002
         assert "no tiene contrato" in exc_info.value.error.message
 
     @pytest.mark.asyncio
     async def test_missing_uri_is_invalid_params(self):
-        with pytest.raises(McpError) as exc_info:
+        with pytest.raises(MCPError) as exc_info:
             await read_contract_resource(None)
         assert exc_info.value.error.code == -32602
 
     @pytest.mark.asyncio
     async def test_uri_with_trailing_segment_is_not_resolvable(self):
-        with pytest.raises(McpError) as exc_info:
+        with pytest.raises(MCPError) as exc_info:
             await read_contract_resource(contract_uri("vectorize_event") + "/extra")
         assert exc_info.value.error.code == -32002

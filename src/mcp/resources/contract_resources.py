@@ -25,7 +25,6 @@ import re
 
 import mcp.types as types
 from mcp.shared.exceptions import MCPError
-from mcp.types import Error
 
 from src.contracts import CONTRACT_URI_TEMPLATE, task_contract_registry
 from src.schemas.tasks import TaskType
@@ -60,8 +59,12 @@ _SCHEMA_DISCLAIMER = (
 
 
 def _resource_not_found(message: str) -> MCPError:
-    """Error de protocolo -32002: resource no resoluble por este servidor."""
-    return MCPError(error=Error(code=RESOURCE_NOT_FOUND, message=message))
+    """Error de protocolo -32002: resource no resoluble por este servidor.
+
+    MCPError en el SDK v2 toma (code, message, data) directamente — el
+    TypedDict Error de mcp.types ya no existe en esa línea del SDK.
+    """
+    return MCPError(code=RESOURCE_NOT_FOUND, message=message)
 
 
 def get_contract_resources() -> list[types.Resource]:
@@ -90,16 +93,14 @@ async def read_contract_resource(uri: str | None) -> types.ReadResourceResult:
     """Resuelve resources/read: raíz → índice del catálogo; template → JSON Schema.
 
     Raises:
-        McpError: -32602 si falta la URI; -32002 si la URI está fuera del
+        MCPError: -32602 si falta la URI; -32002 si la URI está fuera del
         espacio de contratos, el tipo no existe o no tiene contrato registrado.
     """
     uri = (uri or "").strip()
     if not uri:
         raise MCPError(
-            error=Error(
-                code=INVALID_PARAMS,
-                message="resources/read requiere el parámetro 'uri' (string).",
-            )
+            code=INVALID_PARAMS,
+            message="resources/read requiere el parámetro 'uri' (string).",
         )
 
     # Raíz: índice del catálogo. El agente con modelo mental REST que reciba
