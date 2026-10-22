@@ -99,52 +99,51 @@ class TestRegistryValidateConsolidateMemory:
 
 
 class TestRegistryValidateVectorizeImageEvent:
-    """validate() acepta/rechaza el contrato de vectorize_image_event (ADR-007-003, #61; imagen SOLO como data URI — path eliminado por decisión 22 oct)."""
+    """validate() acepta/rechaza el contrato de vectorize_image_event (ADR-007-003, #61).
+
+    Imagen SOLO como data URI (decisión 22 oct) y evento AUTO-ANCLADO (rework
+    22 oct): SIN text_event_id — la correlación texto↔imagen la da la sesión.
+    project (FR-3 #51) viaja en el propio evento, no en un registro textual.
+    """
 
     def test_validate_accepts_canonical_payload(self):
+        """Canon mínimo: image como data URI; defaults materializados con project None."""
         validated = task_contract_registry.validate(
             TaskType.VECTORIZE_IMAGE_EVENT,
-            {
-                "image": "data:image/png;base64,aGVsbG8=",
-                "text_event_id": "11111111-1111-1111-1111-111111111111",
-            },
+            {"image": "data:image/png;base64,aGVsbG8="},
         )
-        assert validated["image"] == "data:image/png;base64,aGVsbG8="
-        assert validated["text_event_id"] == "11111111-1111-1111-1111-111111111111"
+        assert validated == {
+            "image": "data:image/png;base64,aGVsbG8=",
+            "project": None,
+            "domain": "system",
+            "visibility": "private",
+        }
 
-    def test_validate_normalizes_defaults(self):
+    def test_validate_accepts_explicit_project(self):
+        """FR-3 (#51): el proyecto viaja en el propio contrato de imagen."""
         validated = task_contract_registry.validate(
             TaskType.VECTORIZE_IMAGE_EVENT,
-            {
-                "image": "data:image/jpeg;base64,aGVsbG8=",
-                "text_event_id": "11111111-1111-1111-1111-111111111111",
-            },
+            {"image": "data:image/png;base64,aGVsbG8=", "project": "elios-workshop"},
         )
-        assert validated["domain"] == "system"
-        assert validated["visibility"] == "private"
+        assert validated["project"] == "elios-workshop"
 
-    def test_validate_rejects_missing_image(self):
+    def test_validate_rejects_empty_project(self):
         with pytest.raises(ValidationError):
             task_contract_registry.validate(
                 TaskType.VECTORIZE_IMAGE_EVENT,
-                {"text_event_id": "11111111-1111-1111-1111-111111111111"},
+                {"image": "data:image/png;base64,aGVsbG8=", "project": ""},
             )
 
-    def test_validate_rejects_missing_text_event_id(self):
+    def test_validate_rejects_missing_image(self):
         with pytest.raises(ValidationError):
-            task_contract_registry.validate(
-                TaskType.VECTORIZE_IMAGE_EVENT, {"image": "data:image/png;base64,aGVsbG8="}
-            )
+            task_contract_registry.validate(TaskType.VECTORIZE_IMAGE_EVENT, {})
 
     def test_validate_rejects_path_instead_of_data_uri(self):
         """Un path local NO viaja: el payload es autocontenido (sistema distribuido)."""
         with pytest.raises(ValidationError):
             task_contract_registry.validate(
                 TaskType.VECTORIZE_IMAGE_EVENT,
-                {
-                    "image": "/home/dev/coreAI/scratch/gatos_coco.jpg",
-                    "text_event_id": "11111111-1111-1111-1111-111111111111",
-                },
+                {"image": "/home/dev/coreAI/scratch/gatos_coco.jpg"},
             )
 
     def test_validate_rejects_malformed_data_uri(self):
@@ -152,21 +151,18 @@ class TestRegistryValidateVectorizeImageEvent:
         with pytest.raises(ValidationError):
             task_contract_registry.validate(
                 TaskType.VECTORIZE_IMAGE_EVENT,
-                {
-                    "image": "data:text/plain;base64,aGVsbG8=",
-                    "text_event_id": "11111111-1111-1111-1111-111111111111",
-                },
+                {"image": "data:text/plain;base64,aGVsbG8="},
             )
 
-    def test_validate_rejects_extra_keys(self):
-        """El proyecto NO viaja en el contrato de imagen (FR-3): vive en el registro textual."""
+    def test_validate_rejects_text_event_id_as_ghost_key(self):
+        """text_event_id es clave fantasma: el evento de imagen es auto-anclado
+        (la correlación texto↔imagen la da la sesión, no otra tarea)."""
         with pytest.raises(ValidationError):
             task_contract_registry.validate(
                 TaskType.VECTORIZE_IMAGE_EVENT,
                 {
                     "image": "data:image/png;base64,aGVsbG8=",
                     "text_event_id": "11111111-1111-1111-1111-111111111111",
-                    "project": "clave fantasma — el link viaja en el registro textual",
                 },
             )
 

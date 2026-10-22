@@ -38,9 +38,10 @@ class VectorRepository:
                 )
                 
         if filters.tags_any:
-            must_conditions.append(
-                models.FieldCondition(key="metadata.tags", match=models.MatchAny(any=filters.tags_any))
-            )
+            for tag in filters.tags_any:
+                must_conditions.append(
+                    models.FieldCondition(key="metadata.tags", match=models.MatchAny(any=filters.tags_any))
+                )
             
         if filters.properties_match:
             for key, value in filters.properties_match.items():
@@ -104,9 +105,10 @@ class VectorRepository:
         """
         Inyecta o actualiza un vector de IMAGEN en la colección de imágenes
         (ADR-007-002 #50: dim 1024 jina-clip-v2, espacio propio). El punto ES
-        la tarea de imagen (idempotencia por re-dispatch); su payload referencia
-        el registro textual vía text_event_id (regla 2 del bypass cercado).
-        La imagen en sí NO se persiste: el vector es dato derivado.
+        la tarea de imagen (idempotencia por re-dispatch); su payload ancla
+        el vector a la SESIÓN del evento (correlación texto↔imagen, decisión
+        22 oct) y a su proyecto (FR-3 #51). La imagen en sí NO se persiste:
+        el vector es dato derivado.
         """
         return await self._upsert_point(
             collection=IMAGE_COLLECTION,

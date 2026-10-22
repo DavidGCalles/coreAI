@@ -3,14 +3,17 @@ Tests unitarios para handle_vectorize_image_event (ADR-007-003, Issue #61).
 
 Aísla exclusivamente la lógica algorítmica del handler sin interactuar con la
 cola (criterio de aceptación del 4.3): gateway LiteLLM y Qdrant mockeados.
+
+Evento AUTO-ANCLADO (decisión de David, 22 oct): la tarea de imagen YA es el
+evento relacional — SIN text_event_id ni write-then-read contra un registro
+textual. La correlación texto↔imagen la da la SESIÓN (mismo session_id).
 Valida:
-- Coreografía de la regla 2 del bypass cercado: el registro textual
-  referenciado debe existir, ser vectorize_event y estar COMPLETED
-  (write-then-read) — tres fallos distintos con error_trace legible.
+- Resolución relacional: la tarea cuelga de una sesión existente (inquilino).
 - El embedding se pide al GATEWAY (entrada image-embedding + modality=image),
   nunca a Infinity directo (BUG-004 #58).
 - El vector aterriza en la colección de imágenes: el punto ES la tarea de
-  imagen; la imagen NO se persiste; el payload referencia text_event_id.
+  imagen; la imagen NO se persiste; el payload ancla el vector a su sesión
+  y a su proyecto (FR-3 #51, en el propio evento).
 - Telemetría simétrica con el flujo textual: factura de tokens en llm_audit.
 - Fallos legítimos: gateway caído (rollback + re-raise), embedding vacío,
   corrupción de cola (sin extracción tolerante — ADR-006).
@@ -44,7 +47,6 @@ VALID_IMAGE_DATA_URI = (
 TASK_ID = uuid.UUID("a47ac10b-58cc-4372-a567-0e02b2c3d479")
 SESSION_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 ENTITY_ID = uuid.UUID("99999999-9999-9999-9999-999999999999")
-TEXT_EVENT_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
 
 
 # =====================================================================
@@ -64,27 +66,21 @@ def _db_session():
     return db_session
 
 
-def _text_task(status=TaskStatus.COMPLETED, task_type=TaskType.VECTORIZE_EVENT.value):
-    return Task(
-        id=TEXT_EVENT_ID,
-        session_id=SESSION_ID,
-        status=status,
-        payload={"task_type": task_type, "content": "Pieza del catálogo: tornillo M6."},
-    )
-
-
-def _image_task():
+def _image_task(**payload_overrides):
+    """Tarea de imagen auto-anclada: sin text_event_id, con project (FR-3 #51)."""
+    payload = {
+        "task_type": TaskType.VECTORIZE_IMAGE_EVENT.value,
+        "image": VALID_IMAGE_DATA_URI,
+        "project": "elios-workshop",
+        "domain": "system",
+        "visibility": "private",
+    }
+    payload.update(payload_overrides)
     return Task(
         id=TASK_ID,
         session_id=SESSION_ID,
         status=TaskStatus.RUNNING,
-        payload={
-            "task_type": TaskType.VECTORIZE_IMAGE_EVENT.value,
-            "image": VALID_IMAGE_DATA_URI,
-            "text_event_id": str(TEXT_EVENT_ID),
-            "domain": "system",
-            "visibility": "private",
-        },
+        payload=payload,
     )
 
 
@@ -114,13 +110,10 @@ def _session_mock(*execute_results):
 @patch("src.workers.task_router.LLMClient")
 async def test_happy_path(mock_llm_client_class, mock_get_qdrant):
     """
-    Texto COMPLETED → imagen vectorizada vía gateway → punto en la colección
-    de imágenes referenciando el registro textual. Nada más, nada menos.
+    Sesión resuelta → imagen vectorizada vía gateway → punto en la colección
+    de imágenes anclado a su sesión y a su proyecto. Nada más, nada menos.
     """
-    session_mock = _session_mock(
-        _session_result(_db_session()),
-        _session_result(_text_task()),
-    )
+    session_mock = _session_mock(_session_result(_db_session()))
     task = _image_task()
 
     qdrant_mock = AsyncMock()
@@ -132,8 +125,9 @@ async def test_happy_path(mock_llm_client_class, mock_get_qdrant):
 
     await handle_vectorize_image_event(task, session_mock)
 
-    # 1. Resolución relacional: sesión + registro textual (dos SELECT)
-    assert session_mock.execute.await_count == 2
+    # 1. Resolución relacional: SOLO la sesión — el evento es auto-anclado
+    #    (la correlación texto↔imagen ES la sesión, no otra tarea).
+    assert session_mock.execute.await_count == 1
 
     # 2. El embedding se pide al GATEWAY: entrada image-embedding + modality (BUG-004 #58)
     llm_instance.generate_embedding.assert_awaited_once()
@@ -149,10 +143,13 @@ async def test_happy_path(mock_llm_client_class, mock_get_qdrant):
     point = kwargs["points"][0]
     assert point.id == str(TASK_ID)
     assert point.vector == [0.115, 0.224, -0.332]
-    # La imagen NO se persiste: el vector es dato derivado del registro textual
+    # La imagen NO se persiste: el vector es dato derivado del propio evento
     assert "image" not in point.payload
+    # Auto-anclado: SIN text_event_id; la correlación ES la sesión
+    assert "text_event_id" not in point.payload
     assert point.payload["tenant_id"] == str(ENTITY_ID)
-    assert point.payload["text_event_id"] == str(TEXT_EVENT_ID)
+    assert point.payload["session_id"] == str(SESSION_ID)
+    assert point.payload["project"] == "elios-workshop"
     assert point.payload["domain"] == "system"
     assert point.payload["visibility"] == "private"
 
@@ -168,8 +165,30 @@ async def test_happy_path(mock_llm_client_class, mock_get_qdrant):
     session_mock.rollback.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+@patch("src.workers.task_router.get_qdrant_client", new_callable=AsyncMock)
+@patch("src.workers.task_router.LLMClient")
+async def test_project_defaults_to_none(mock_llm_client_class, mock_get_qdrant):
+    """Sin proyecto explícito el punto aterriza con project=None (FR-3 opcional)."""
+    session_mock = _session_mock(_session_result(_db_session()))
+    task = _image_task()
+    task.payload.pop("project")
+
+    qdrant_mock = AsyncMock()
+    mock_get_qdrant.return_value = qdrant_mock
+    llm_instance = AsyncMock()
+    llm_instance.generate_embedding.return_value = _gateway_response()
+    mock_llm_client_class.return_value = llm_instance
+
+    await handle_vectorize_image_event(task, session_mock)
+
+    point = qdrant_mock.upsert.call_args.kwargs["points"][0]
+    assert point.payload["project"] is None
+    assert point.payload["session_id"] == str(SESSION_ID)
+
+
 # =====================================================================
-# TESTS: COREOGRAFÍA (regla 2 del bypass cercado)
+# TESTS: RESOLUCIÓN RELACIONAL Y CORRUPCIÓN DE COLA
 # =====================================================================
 
 @pytest.mark.asyncio
@@ -182,48 +201,6 @@ async def test_missing_session_aborts():
 
 
 @pytest.mark.asyncio
-async def test_orphan_text_reference_aborts():
-    """Sin registro textual no hay vector: sería huérfano (regla 2 del bypass)."""
-    session_mock = _session_mock(
-        _session_result(_db_session()),
-        _session_result(None),
-    )
-    with pytest.raises(ValueError) as exc_info:
-        await handle_vectorize_image_event(_image_task(), session_mock)
-    assert "huérfano" in str(exc_info.value)
-    assert str(TEXT_EVENT_ID) in str(exc_info.value)
-
-
-@pytest.mark.asyncio
-async def test_reference_of_wrong_type_aborts():
-    """text_event_id que apunta a otra clase de tarea no ancla nada."""
-    session_mock = _session_mock(
-        _session_result(_db_session()),
-        _session_result(_text_task(task_type=TaskType.CONSOLIDATE_MEMORY.value)),
-    )
-    with pytest.raises(ValueError) as exc_info:
-        await handle_vectorize_image_event(_image_task(), session_mock)
-    assert "NO es vectorize_event" in str(exc_info.value)
-
-
-@pytest.mark.asyncio
-async def test_uncompleted_text_reference_aborts():
-    """Write-then-read: la imagen llega antes de que el texto esté COMPLETED."""
-    session_mock = _session_mock(
-        _session_result(_db_session()),
-        _session_result(_text_task(status=TaskStatus.PENDING)),
-    )
-    with pytest.raises(ValueError) as exc_info:
-        await handle_vectorize_image_event(_image_task(), session_mock)
-    assert "COMPLETED" in str(exc_info.value)
-    assert "write-then-read" in str(exc_info.value)
-
-
-# =====================================================================
-# TESTS: FALLOS LEGÍTIMOS Y CORRUPCIÓN DE COLA
-# =====================================================================
-
-@pytest.mark.asyncio
 async def test_corrupt_payload_aborts_without_tolerant_extraction():
     """La frontera ya validó: una clave ausente solo puede ser corrupción de cola."""
     task = _image_task()
@@ -233,17 +210,32 @@ async def test_corrupt_payload_aborts_without_tolerant_extraction():
     with pytest.raises(ValueError) as exc_info:
         await handle_vectorize_image_event(task, session_mock)
     assert "no cumple el contrato" in str(exc_info.value)
+    assert "corrupción de cola" in str(exc_info.value)
 
+
+@pytest.mark.asyncio
+async def test_non_dict_payload_aborts():
+    """Un payload que no es objeto JSON muere ANTES de tocar la capa relacional."""
+    task = _image_task()
+    task.payload = "payload corrupto: string"
+    session_mock = _session_mock()
+
+    with pytest.raises(ValueError) as exc_info:
+        await handle_vectorize_image_event(task, session_mock)
+    assert "no es un objeto JSON" in str(exc_info.value)
+    session_mock.execute.assert_not_awaited()
+
+
+# =====================================================================
+# TESTS: FALLOS LEGÍTIMOS
+# =====================================================================
 
 @pytest.mark.asyncio
 @patch("src.workers.task_router.get_qdrant_client", new_callable=AsyncMock)
 @patch("src.workers.task_router.LLMClient")
 async def test_gateway_down_rolls_back_and_reraises(mock_llm_client_class, mock_get_qdrant):
     """Cortafuegos del flujo textual: nada a medias queda en la transacción."""
-    session_mock = _session_mock(
-        _session_result(_db_session()),
-        _session_result(_text_task()),
-    )
+    session_mock = _session_mock(_session_result(_db_session()))
     llm_instance = AsyncMock()
     llm_instance.generate_embedding.side_effect = httpx.RequestError("gateway caído")
     mock_llm_client_class.return_value = llm_instance
@@ -261,10 +253,7 @@ async def test_gateway_down_rolls_back_and_reraises(mock_llm_client_class, mock_
 @patch("src.workers.task_router.LLMClient")
 async def test_empty_embedding_is_legible_failure(mock_llm_client_class, mock_get_qdrant):
     """Imagen ilegible/corrupta para el modelo de visión: error legible, sin factura."""
-    session_mock = _session_mock(
-        _session_result(_db_session()),
-        _session_result(_text_task()),
-    )
+    session_mock = _session_mock(_session_result(_db_session()))
     llm_instance = AsyncMock()
     llm_instance.generate_embedding.return_value = _gateway_response(embedding=())
     mock_llm_client_class.return_value = llm_instance
@@ -291,7 +280,11 @@ async def test_upsert_image_targets_the_image_collection():
     returned = await repo.upsert_image(
         point_id=point_id,
         vector=[0.1, 0.2],
-        payload={"tenant_id": "t", "text_event_id": str(TEXT_EVENT_ID)},
+        payload={
+            "tenant_id": "t",
+            "session_id": str(SESSION_ID),
+            "project": None,
+        },
     )
 
     assert returned == str(point_id)
