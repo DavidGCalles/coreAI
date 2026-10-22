@@ -29,7 +29,9 @@ class LLMClient:
                 response = await client.post(
                     f"{self.base_url}/v1/embeddings",
                     headers=self.headers,
-                    json=request_data.model_dump() # Pydantic se encarga
+                    # exclude_none: la modalidad solo viaja cuando está fijada
+                    # (image-embedding) — las requests de texto quedan byte-idénticas.
+                    json=request_data.model_dump(exclude_none=True)
                 )
                 response.raise_for_status()
                 
