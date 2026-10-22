@@ -51,7 +51,7 @@ class TestResourcesList:
         roots = [r for r in resources if str(r.uri) == CONTRACTS_ROOT_URI]
         assert len(roots) == 1, "Debe haber exactamente una raíz del catálogo"
         root = roots[0]
-        assert root.mimeType == CATALOG_MIME_TYPE
+        assert root.mime_type == CATALOG_MIME_TYPE
         assert root.description  # el índice se explica a sí mismo
 
     def test_list_publishes_one_resource_per_contracted_type(self):
@@ -62,7 +62,7 @@ class TestResourcesList:
             assert uri in by_uri, f"Falta el resource de {task_type}"
             resource = by_uri[uri]
             assert uri == CONTRACT_URI_TEMPLATE.format(task_type=task_type)
-            assert resource.mimeType == CONTRACT_MIME_TYPE
+            assert resource.mime_type == CONTRACT_MIME_TYPE
             assert task_type in resource.name
             assert resource.description
 
@@ -86,7 +86,7 @@ class TestReadRoot:
         assert len(result.contents) == 1
         content = result.contents[0]
         assert str(content.uri) == CONTRACTS_ROOT_URI
-        assert content.mimeType == CATALOG_MIME_TYPE
+        assert content.mime_type == CATALOG_MIME_TYPE
 
         index = json.loads(content.text)
         assert index["catalog"] == CONTRACTS_ROOT_URI
@@ -113,7 +113,7 @@ class TestReadContractByType:
         result = await read_contract_resource(contract_uri(task_type))
         assert len(result.contents) == 1
         content = result.contents[0]
-        assert content.mimeType == CONTRACT_MIME_TYPE
+        assert content.mime_type == CONTRACT_MIME_TYPE
 
         # Igualdad contra el registro (la superficie que usa la frontera)...
         assert json.loads(content.text) == task_contract_registry.schema(
