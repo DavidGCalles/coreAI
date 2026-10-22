@@ -156,7 +156,7 @@ class TestReadErrors:
         with pytest.raises(MCPError) as exc_info:
             await read_contract_resource(contract_uri(TaskType.INIT_SESSION))
         assert exc_info.value.error.code == -32002
-        assert "no tiene contrato" in exc_info.value.error.message
+        assert "tiene contrato registrado" in exc_info.value.error.message
 
     @pytest.mark.asyncio
     async def test_missing_uri_is_invalid_params(self):
