@@ -12,6 +12,7 @@ import inspect
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Any
+from uuid import UUID
 
 from src.schemas.tasks import TaskType
 from src.schemas.memory import DomainType, Visibility
@@ -52,6 +53,15 @@ class VectorizeEventPayload(TaskPayloadContract):
         min_length=1,
         description="Texto canónico a vectorizar. Clave obligatoria y única de contenido.",
     )
+    project: str | None = Field(
+        None,
+        min_length=1,
+        description=(
+            "Metadato FR-3 (#51): proyecto de procedencia del registro. "
+            "Opcional. Dato del inquilino, no taxonomía del core — cuando "
+            "lleguen open catalogs, el registry validará los valores per-tenant."
+        ),
+    )
     domain: DomainType = Field(
         default=DomainType.SYSTEM,
         description="Dominio del nodo de memoria. Por defecto 'system'.",
@@ -73,6 +83,38 @@ class ConsolidateMemoryPayload(TaskPayloadContract):
         ...,
         min_length=1,
         description="Ventana temporal de consolidación (p. ej. '7d'). Obligatorio.",
+    )
+
+
+class VectorizeImageEventPayload(TaskPayloadContract):
+    """Contrato de `vectorize_image_event` (ADR-007-003, #61): vector de imagen derivado que referencia el registro textual."""
+
+    image: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Imagen a vectorizar: data URI base64 (image/*) o path accesible "
+            "al contenedor worker. La decodificación y legibilidad real de la "
+            "imagen son fallo legítimo del handler (asíncrono), no de contrato."
+        ),
+    )
+    text_event_id: UUID = Field(
+        ...,
+        description=(
+            "UUID de la tarea `vectorize_event` cuyo registro textual es la "
+            "fuente relacional de verdad de este vector (regla 2 del bypass "
+            "cercado, ADR-007). Es el identificador que el cliente de borde "
+            "realmente tiene tras el write-then-read. El link pieza↔proyecto "
+            "viaja en ese registro textual (FR-3, #51), no aquí."
+        ),
+    )
+    domain: DomainType = Field(
+        default=DomainType.SYSTEM,
+        description="Dominio del registro textual referenciado. Por defecto 'system'.",
+    )
+    visibility: Visibility = Field(
+        default=Visibility.PRIVATE,
+        description="Nivel de acceso del vector de imagen. Por defecto 'private'.",
     )
 
 
@@ -145,3 +187,4 @@ task_contract_registry = TaskContractRegistry()
 # Solo los tipos con lógica real registran contrato; los stubs no son despachables.
 task_contract_registry.register(TaskType.VECTORIZE_EVENT, VectorizeEventPayload)
 task_contract_registry.register(TaskType.CONSOLIDATE_MEMORY, ConsolidateMemoryPayload)
+task_contract_registry.register(TaskType.VECTORIZE_IMAGE_EVENT, VectorizeImageEventPayload)

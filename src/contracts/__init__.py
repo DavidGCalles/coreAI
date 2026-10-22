@@ -12,6 +12,7 @@ from src.contracts.registry import (
     TaskContractRegistry,
     TaskPayloadContract,
     VectorizeEventPayload,
+    VectorizeImageEventPayload,
     contract_uri,
     task_contract_registry,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "TaskContractRegistry",
     "TaskPayloadContract",
     "VectorizeEventPayload",
+    "VectorizeImageEventPayload",
     "contract_uri",
     "task_contract_registry",
 ]
