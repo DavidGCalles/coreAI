@@ -9,10 +9,16 @@ Valida:
   (no silent pass-through); los tipos contratados siguen despachables.
 - ADR-006-003 (#44): el loader vive en la clase del contrato y contract_uri()
   es la única fuente del patrón de URI (placeholder hasta #42).
+- Decodificabilidad de imagen en frontera con Pillow (#61, hallazgo E2E 22
+  oct): el stub de 99 bytes rebota SÍNCRONO con diagnóstico.
 """
+
+import base64
+import io
 
 import pytest
 from pydantic import ValidationError
+from PIL import Image
 
 from src.schemas.tasks import TaskType
 from src.contracts import (
@@ -25,6 +31,22 @@ from src.contracts import (
     contract_uri,
 )
 from src.mcp.tools.task_tools import handle_task_tool
+
+
+def _data_uri_real(formato: str, mime: str) -> str:
+    """Data URI con una imagen RASTER real generada con PIL — la frontera
+    exige decodificable, y un fixture inventado ('hello' en bytes) ya no pasa."""
+    imagen = Image.new("RGB", (2, 2), (255, 0, 0))
+    buffer = io.BytesIO()
+    imagen.save(buffer, format=formato)
+    return f"data:image/{mime};base64," + base64.b64encode(buffer.getvalue()).decode()
+
+
+PNG_REAL_DATA_URI = _data_uri_real("PNG", "png")
+JPEG_REAL_DATA_URI = _data_uri_real("JPEG", "jpeg")
+GIF_REAL_DATA_URI = _data_uri_real("GIF", "gif")
+BMP_REAL_DATA_URI = _data_uri_real("BMP", "bmp")
+WEBP_REAL_DATA_URI = _data_uri_real("WEBP", "webp")
 
 
 class TestRegistryValidateVectorizeEvent:
@@ -108,13 +130,13 @@ class TestRegistryValidateVectorizeImageEvent:
     """
 
     def test_validate_accepts_canonical_payload(self):
-        """Canon mínimo: image como data URI; defaults materializados con project None."""
+        """Canon mínimo: image como data URI REAL decodificable; defaults materializados."""
         validated = task_contract_registry.validate(
             TaskType.VECTORIZE_IMAGE_EVENT,
-            {"image": "data:image/png;base64,aGVsbG8="},
+            {"image": PNG_REAL_DATA_URI},
         )
         assert validated == {
-            "image": "data:image/png;base64,aGVsbG8=",
+            "image": PNG_REAL_DATA_URI,
             "project": None,
             "domain": "system",
             "visibility": "private",
@@ -124,7 +146,7 @@ class TestRegistryValidateVectorizeImageEvent:
         """FR-3 (#51): el proyecto viaja en el propio contrato de imagen."""
         validated = task_contract_registry.validate(
             TaskType.VECTORIZE_IMAGE_EVENT,
-            {"image": "data:image/png;base64,aGVsbG8=", "project": "elios-workshop"},
+            {"image": PNG_REAL_DATA_URI, "project": "elios-workshop"},
         )
         assert validated["project"] == "elios-workshop"
 
@@ -132,7 +154,7 @@ class TestRegistryValidateVectorizeImageEvent:
         with pytest.raises(ValidationError):
             task_contract_registry.validate(
                 TaskType.VECTORIZE_IMAGE_EVENT,
-                {"image": "data:image/png;base64,aGVsbG8=", "project": ""},
+                {"image": PNG_REAL_DATA_URI, "project": ""},
             )
 
     def test_validate_rejects_missing_image(self):
@@ -190,9 +212,87 @@ class TestRegistryValidateVectorizeImageEvent:
             task_contract_registry.validate(
                 TaskType.VECTORIZE_IMAGE_EVENT,
                 {
-                    "image": "data:image/png;base64,aGVsbG8=",
+                    "image": PNG_REAL_DATA_URI,
                     "text_event_id": "11111111-1111-1111-1111-111111111111",
                 },
+            )
+
+
+class TestFrontierValidaDecodificabilidad:
+    """Decodificabilidad de imagen en frontera con Pillow (#61, hallazgo E2E 22 oct).
+
+    La tarea 1fefde4a encoló un stub de 99 BYTES con cabecera JPEG válida
+    (uri_len=155: 23 de prefijo + 132 de base64) y murió asíncrona en
+    Infinity con ImageCorruption. [DAVID] La frontera valida ahora con el
+    MISMO oráculo que el consumidor (infinity_emb decodifica con PIL): los
+    stubs truncados rebotan SÍNCRONO en el dispatch, con diagnóstico de
+    bytes, y el agente se autocorrige en el acto (patrón ADR-006).
+    """
+
+    @pytest.mark.parametrize(
+        "uri",
+        [PNG_REAL_DATA_URI, JPEG_REAL_DATA_URI, GIF_REAL_DATA_URI, BMP_REAL_DATA_URI, WEBP_REAL_DATA_URI],
+        ids=["png", "jpeg", "gif", "bmp", "webp"],
+    )
+    def test_formats_raster_reales_pasan(self, uri):
+        """Los cinco formatos del contrato, con imágenes reales de PIL, pasan."""
+        validated = task_contract_registry.validate(
+            TaskType.VECTORIZE_IMAGE_EVENT, {"image": uri}
+        )
+        assert validated["image"] == uri
+
+    def test_stub_truncado_de_99_bytes_rebota(self):
+        """LA clase del hallazgo: JPEG real cortado a 99 bytes (el veredicto
+        del JSONB — cabecera válida, sin final del archivo). Rebota CON el
+        diagnóstico de bytes que delata al truncador."""
+        raw = base64.b64decode(JPEG_REAL_DATA_URI.partition(",")[2])
+        assert len(raw) > 99  # fixture válida para el corte
+        stub = raw[:99]
+        uri = "data:image/jpeg;base64," + base64.b64encode(stub).decode()
+
+        with pytest.raises(ValidationError) as exc_info:
+            task_contract_registry.validate(
+                TaskType.VECTORIZE_IMAGE_EVENT, {"image": uri}
+            )
+        mensaje = str(exc_info.value)
+        assert "99 bytes" in mensaje
+        assert ("truncad" in mensaje.lower()) or ("decodificable" in mensaje.lower())
+
+    def test_png_truncado_rebota(self):
+        """PNG cortado por la mitad: load() revienta en frontera, no en el lane."""
+        raw = base64.b64decode(PNG_REAL_DATA_URI.partition(",")[2])
+        uri = "data:image/png;base64," + base64.b64encode(raw[: len(raw) // 2]).decode()
+        with pytest.raises(ValidationError) as exc_info:
+            task_contract_registry.validate(
+                TaskType.VECTORIZE_IMAGE_EVENT, {"image": uri}
+            )
+        assert "bytes decodificados" in str(exc_info.value)
+
+    def test_mime_mentiroso_rebota(self):
+        """PNG real declarado como JPEG: el formato debe casar con el mime."""
+        with pytest.raises(ValidationError) as exc_info:
+            task_contract_registry.validate(
+                TaskType.VECTORIZE_IMAGE_EVENT,
+                {"image": PNG_REAL_DATA_URI.replace("image/png", "image/jpeg")},
+            )
+        assert "no casa" in str(exc_info.value)
+
+    def test_texto_como_imagen_rebota(self):
+        """El viejo fixture 'aGVsbG8=' ('hello' en bytes) ya no pasa: no es una imagen."""
+        with pytest.raises(ValidationError) as exc_info:
+            task_contract_registry.validate(
+                TaskType.VECTORIZE_IMAGE_EVENT,
+                {"image": "data:image/png;base64,aGVsbG8="},
+            )
+        assert "no son una imagen raster decodificable" in str(exc_info.value)
+
+    def test_base64_longitud_invalida_rebota(self):
+        """Cuerpo que no es múltiplo de 4: el patrón textual lo admite, el
+        decodificador estricto no."""
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.VECTORIZE_IMAGE_EVENT,
+                {"image": "data:image/png;base64,A"},
             )
 
 
