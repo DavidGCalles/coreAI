@@ -6,6 +6,18 @@ from src.schemas.memory import DomainType, MemorySearchFilters
 
 logger = logging.getLogger(__name__)
 
+# =====================================================================
+# COLECCIÓN DE IMÁGENES (ADR-007-002, Issue #50)
+# =====================================================================
+# Espacio propio para los embeddings de visión (jina-clip-v2), separado de
+# las colecciones de texto: otra dimensión (1024 vs 384), otro significado.
+# 1024 dims y coseno — exactamente la configuración validada en el E2E del
+# handler de imágenes (#61): hasta ahora la colección se creaba A MANO.
+IMAGE_COLLECTION = "images"
+IMAGE_VECTOR_SIZE = 1024
+IMAGE_VECTOR_DISTANCE = models.Distance.COSINE
+
+
 class VectorRepository:
     """
     Repositorio vectorial mudo.
@@ -13,6 +25,38 @@ class VectorRepository:
     """
     def __init__(self, client: AsyncQdrantClient):
         self.client = client
+
+    async def ensure_collection(
+        self,
+        collection_name: str,
+        vector_size: int,
+        distance: models.Distance,
+    ) -> None:
+        """
+        Garantía idempotente: crea la colección si no existe, no la toca si ya existe.
+
+        Idempotencia por comparación de nombres (get_collections), no por
+        try/except: el arranque número uno y el reinicio número cien hacen
+        exactamente lo mismo. El worker la invoca al arrancar (ADR-007-002
+        #50) — un despliegue limpio ya no depende de que nadie cree la
+        colección a mano.
+        """
+        existentes = {c.name for c in (await self.client.get_collections()).collections}
+        if collection_name in existentes:
+            logger.debug("Colección '%s' ya existe — nada que hacer", collection_name)
+            return
+
+        await self.client.create_collection(
+            collection_name=collection_name,
+            vectors_config=models.VectorParams(
+                size=vector_size,
+                distance=distance,
+            ),
+        )
+        logger.info(
+            "Colección '%s' creada (%d dims, %s)",
+            collection_name, vector_size, distance,
+        )
 
     def _build_filter(self, filters: MemorySearchFilters) -> models.Filter:
         """Traduce los filtros semánticos de Pydantic al dialecto duro de Qdrant."""
@@ -112,7 +156,7 @@ class VectorRepository:
             await self.client.delete(
                 collection_name=collection,
                 points_selector=models.PointIdsList(points=[str(entity_id)]),
-                wait=True
+                wait=True,
             )
         except Exception as e:
             logger.error("Fallo al eliminar vector %s: %s", entity_id, e)
