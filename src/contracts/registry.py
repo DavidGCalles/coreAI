@@ -12,7 +12,6 @@ import inspect
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Any
-from uuid import UUID
 
 from src.schemas.tasks import TaskType
 from src.schemas.memory import DomainType, Visibility
@@ -90,7 +89,7 @@ class ConsolidateMemoryPayload(TaskPayloadContract):
 
 
 class VectorizeImageEventPayload(TaskPayloadContract):
-    """Contrato de `vectorize_image_event` (ADR-007-003, #61): vectoriza una imagen = genera su embedding numérico para búsqueda semántica (nada que ver con gráficos vectoriales/SVG)."""
+    """Contrato de `vectorize_image_event` (ADR-007-003, #61): vectoriza una imagen = genera su embedding numérico para búsqueda semántica (nada que ver con gráficos vectoriales/SVG). Evento auto-anclado (decisión 22 oct): la tarea de imagen YA es el evento relacional — la correlación con el registro textual de la misma pieza la da la sesión, no una referencia encadenada a otra tarea."""
 
     image: str = Field(
         ...,
@@ -105,19 +104,20 @@ class VectorizeImageEventPayload(TaskPayloadContract):
             "handler (asíncrono), no de contrato."
         ),
     )
-    text_event_id: UUID = Field(
-        ...,
+    project: str | None = Field(
+        None,
+        min_length=1,
         description=(
-            "UUID de la tarea `vectorize_event` cuyo registro textual es la "
-            "fuente relacional de verdad de este vector (regla 2 del bypass "
-            "cercado, ADR-007). Es el identificador que el cliente de borde "
-            "realmente tiene tras el write-then-read. El link pieza↔proyecto "
-            "viaja en ese registro textual (FR-3, #51), no aquí."
+            "Metadato FR-3 (#51): proyecto de procedencia del registro. "
+            "Opcional. Dato del inquilino, no taxonomía del core — cuando "
+            "lleguen open catalogs, el registry validará los valores "
+            "per-tenant. El evento de imagen es auto-anclado: su proyecto "
+            "viaja AQUÍ, no en un registro textual referenciado."
         ),
     )
     domain: DomainType = Field(
         default=DomainType.SYSTEM,
-        description="Dominio del registro textual referenciado. Por defecto 'system'.",
+        description="Dominio del evento de imagen. Por defecto 'system'.",
     )
     visibility: Visibility = Field(
         default=Visibility.PRIVATE,
