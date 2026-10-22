@@ -17,8 +17,14 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiamos el resto del código
-COPY . .
+# Copiamos SOLO el código del servicio.
+# core-mcp y worker son clientes del gateway LiteLLM: los modelos los sirve
+# Infinity en su propia imagen (Dockerfile.infinity). COPY . . horneaba en
+# cada imagen los pesos de models/ (e5 + NLI + kit CLIP), el .venv de dev
+# (con torch/triton dentro) y el .git completo — gigas de lastre muerto que
+# agotaban el disco en cada build. El contexto se cerca además en
+# Dockerfile.dockerignore para que ni se transfiera al builder.
+COPY src/ ./src
 
 # Exponemos el puerto del servidor MCP
 EXPOSE 8000
