@@ -101,9 +101,10 @@ class TestRegistryValidateConsolidateMemory:
 class TestRegistryValidateVectorizeImageEvent:
     """validate() acepta/rechaza el contrato de vectorize_image_event (ADR-007-003, #61).
 
-    Imagen SOLO como data URI (decisión 22 oct) y evento AUTO-ANCLADO (rework
-    22 oct): SIN text_event_id — la correlación texto↔imagen la da la sesión.
-    project (FR-3 #51) viaja en el propio evento, no en un registro textual.
+    Imagen como data URI base64 RASTER-ONLY (decisión 22 oct hecha contrato)
+    y evento AUTO-ANCLADO (rework 22 oct): SIN text_event_id — la correlación
+    texto↔imagen la da la sesión. project (FR-3 #51) viaja en el propio
+    evento, no en un registro textual.
     """
 
     def test_validate_accepts_canonical_payload(self):
@@ -152,6 +153,34 @@ class TestRegistryValidateVectorizeImageEvent:
             task_contract_registry.validate(
                 TaskType.VECTORIZE_IMAGE_EVENT,
                 {"image": "data:text/plain;base64,aGVsbG8="},
+            )
+
+    def test_validate_rejects_svg_data_uri(self):
+        """Semántica anti-SVG (22 oct) hecha CONTRATO: un SVG no produce
+        embedding numérico (PIL no lo lee; moriría asíncrono en Infinity con
+        ImageCorruption) — rebota en la frontera, no en el lane."""
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.VECTORIZE_IMAGE_EVENT,
+                {"image": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0ibj0iLzIiPjwvc3ZnPg=="},
+            )
+
+    def test_validate_rejects_empty_base64_body(self):
+        """Un data URI sin contenido no es una imagen: rebota en la frontera,
+        no muere asíncrona en Infinity."""
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.VECTORIZE_IMAGE_EVENT,
+                {"image": "data:image/png;base64,"},
+            )
+
+    def test_validate_rejects_non_base64_body(self):
+        """El cuerpo tras «base64,» es alfabeto estricto anclado al final:
+        basura tras la coma rebota ANTES de encolarse."""
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.VECTORIZE_IMAGE_EVENT,
+                {"image": "data:image/png;base64,aGVsbG8!!esto no es base64"},
             )
 
     def test_validate_rejects_text_event_id_as_ghost_key(self):
