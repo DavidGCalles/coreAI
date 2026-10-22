@@ -2,7 +2,7 @@
 Tests del Registro Central de Contratos de Tarea (ADR-006-001, Issue #43).
 
 Valida:
-- validate() acepta/rechaza payload por tipo (vectorize_event, consolidate_memory)
+- validate() acepta/rechaza payload por tipo (vectorize_event, consolidate_memory, vectorize_image_event)
 - schema() coincide con model_json_schema() del modelo (cero duplicación)
 - list() devuelve el catálogo contratado (stubs excluidos)
 - Negativo de frontera: dispatch de un tipo sin contrato → isError explícito
@@ -21,6 +21,7 @@ from src.contracts import (
     CONTRACT_URI_TEMPLATE,
     ConsolidateMemoryPayload,
     VectorizeEventPayload,
+    VectorizeImageEventPayload,
     contract_uri,
 )
 from src.mcp.tools.task_tools import handle_task_tool
@@ -97,6 +98,57 @@ class TestRegistryValidateConsolidateMemory:
             )
 
 
+class TestRegistryValidateVectorizeImageEvent:
+    """validate() acepta/rechaza el contrato de vectorize_image_event (ADR-007-003, #61)."""
+
+    def test_validate_accepts_canonical_payload(self):
+        validated = task_contract_registry.validate(
+            TaskType.VECTORIZE_IMAGE_EVENT,
+            {
+                "image": "data:image/png;base64,aGVsbG8=",
+                "text_event_id": "11111111-1111-1111-1111-111111111111",
+            },
+        )
+        assert validated["image"] == "data:image/png;base64,aGVsbG8="
+        assert validated["text_event_id"] == "11111111-1111-1111-1111-111111111111"
+
+    def test_validate_normalizes_defaults(self):
+        validated = task_contract_registry.validate(
+            TaskType.VECTORIZE_IMAGE_EVENT,
+            {
+                "image": "data:image/jpeg;base64,aGVsbG8=",
+                "text_event_id": "11111111-1111-1111-1111-111111111111",
+            },
+        )
+        assert validated["domain"] == "system"
+        assert validated["visibility"] == "private"
+
+    def test_validate_rejects_missing_image(self):
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.VECTORIZE_IMAGE_EVENT,
+                {"text_event_id": "11111111-1111-1111-1111-111111111111"},
+            )
+
+    def test_validate_rejects_missing_text_event_id(self):
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.VECTORIZE_IMAGE_EVENT, {"image": "data:image/png;base64,aGVsbG8="}
+            )
+
+    def test_validate_rejects_extra_keys(self):
+        """El proyecto NO viaja en el contrato de imagen (FR-3): vive en el registro textual."""
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.VECTORIZE_IMAGE_EVENT,
+                {
+                    "image": "data:image/png;base64,aGVsbG8=",
+                    "text_event_id": "11111111-1111-1111-1111-111111111111",
+                    "project": "clave fantasma — el link viaja en el registro textual",
+                },
+            )
+
+
 class TestRegistrySchemaAndList:
     """schema() coincide con el modelo; list() devuelve el catálogo contratado."""
 
@@ -104,10 +156,15 @@ class TestRegistrySchemaAndList:
         """La misma definición que valida es la que se sirve: cero duplicación."""
         assert task_contract_registry.schema(TaskType.VECTORIZE_EVENT) == VectorizeEventPayload.model_json_schema()
         assert task_contract_registry.schema(TaskType.CONSOLIDATE_MEMORY) == ConsolidateMemoryPayload.model_json_schema()
+        assert task_contract_registry.schema(TaskType.VECTORIZE_IMAGE_EVENT) == VectorizeImageEventPayload.model_json_schema()
 
     def test_list_returns_only_contracted_catalog(self):
-        """Solo los dos tipos con lógica real; los stubs no son despachables."""
-        assert set(task_contract_registry.list()) == {"vectorize_event", "consolidate_memory"}
+        """Solo los tipos con lógica real; los stubs no son despachables."""
+        assert set(task_contract_registry.list()) == {
+            "vectorize_event",
+            "consolidate_memory",
+            "vectorize_image_event",
+        }
 
     def test_schema_of_unregistered_type_raises(self):
         with pytest.raises(ContractNotRegisteredError):
@@ -137,13 +194,14 @@ class TestDispatchFrontierContracts:
             assert "consolidate_memory" in text
 
     def test_contracted_types_are_dispatchable(self):
-        """Los dos tipos con lógica real tienen contrato: la frontera los deja pasar.
+        """Los tipos con lógica real tienen contrato: la frontera los deja pasar.
 
         La persistencia E2E de un tipo contratado la valida el test de integración
         migrado (test_mcp_task_tools) con su limpieza de BD correspondiente.
         """
         assert task_contract_registry.has_contract(TaskType.VECTORIZE_EVENT)
         assert task_contract_registry.has_contract(TaskType.CONSOLIDATE_MEMORY)
+        assert task_contract_registry.has_contract(TaskType.VECTORIZE_IMAGE_EVENT)
 
 
 class TestContractLoader:
@@ -151,7 +209,12 @@ class TestContractLoader:
 
     def test_load_returns_normalized_dict(self):
         loaded = VectorizeEventPayload.load({"content": "x"})
-        assert loaded == {"content": "x", "domain": "system", "visibility": "private"}
+        assert loaded == {
+            "content": "x",
+            "project": None,
+            "domain": "system",
+            "visibility": "private",
+        }
 
     def test_load_rejects_violating_payload(self):
         with pytest.raises(ValidationError):

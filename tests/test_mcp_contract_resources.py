@@ -24,6 +24,7 @@ from src.contracts import (
     CONTRACT_URI_TEMPLATE,
     ConsolidateMemoryPayload,
     VectorizeEventPayload,
+    VectorizeImageEventPayload,
     contract_uri,
     task_contract_registry,
 )
@@ -38,6 +39,7 @@ from src.mcp.resources.contract_resources import (
 MODEL_BY_TYPE = {
     "vectorize_event": VectorizeEventPayload,
     "consolidate_memory": ConsolidateMemoryPayload,
+    "vectorize_image_event": VectorizeImageEventPayload,
 }
 
 
