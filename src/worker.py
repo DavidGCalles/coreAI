@@ -41,7 +41,17 @@ async def worker_loop():
                     except Exception as execution_error:
                         # Fase 3 (Fallo controlado de negocio)
                         logger.error("Fallo ejecutando tarea %s: %s", task.id, execution_error)
-                        await repo.fail_task(task.id, str(execution_error))
+                        # Trace HONESTO (#61): clase + mensaje de la excepción real.
+                        # str(e) a secas perdía la clase (un httpx.ConnectError quedaba
+                        # como «Connection refused» sin culpable, y una excepción sin
+                        # mensaje como trace vacío). No se vuelca el traceback
+                        # completo: el JSONB del payload ya viaja cargado con la
+                        # data URI; el diagnóstico de una línea es el contrato de
+                        # coreai_get_task.
+                        await repo.fail_task(
+                            task.id,
+                            f"{type(execution_error).__name__}: {execution_error}",
+                        )
                 else:
                     # Cola vacía: relajamos el polling progresivamente
                     await asyncio.sleep(backoff)
