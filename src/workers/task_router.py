@@ -11,7 +11,7 @@ import logging
 from typing import Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from src.db.models import Task, Session, TaskStatus
+from src.db.models import Task, Session
 from src.db.vector_db import get_qdrant_client
 from src.schemas.tasks import TaskType
 from src.schemas.llm import EmbeddingRequest
@@ -177,16 +177,17 @@ async def handle_vectorize_image_event(task: Task, session: AsyncSession) -> Non
     Vectorizar = generar el embedding NUMÉRICO de la imagen para búsqueda
     semántica — nada que ver con gráficos vectoriales (SVG/potrace).
 
-    Coreografía (regla 2 del bypass cercado, ADR-007): la imagen SIEMPRE
-    llega después de su registro textual. El contrato garantiza la FORMA
-    (data URI + text_event_id); este handler garantiza la EXISTENCIA: la
-    tarea vectorize_event referenciada debe existir, ser del tipo correcto
-    y estar COMPLETED (write-then-read). El embedding se consume del
+    Evento auto-anclado (decisión de David, 22 oct): la tarea de imagen
+    YA es el evento relacional — vive en Postgres, cuelga de una sesión y
+    de un inquilino. La correlación con el registro textual de la misma
+    pieza la da la SESIÓN (mismo session_id), no una referencia encadenada
+    a otra tarea: coreografiar al inquilino desde el core era redundancia
+    pura y el cliente la manejaba fatal. El embedding se consume del
     GATEWAY LiteLLM (entrada image-embedding, provider infinity — BUG-004
     #58), nunca de Infinity directo. El vector aterriza en la colección de
     imágenes (dim 1024 jina-clip-v2, espacio propio — init idempotente del
     #50) y la imagen en sí NO se persiste: el vector es dato derivado del
-    registro textual.
+    propio evento.
     """
     logger.info("  [Worker] Vectorizando imagen para la tarea %s", task.id)
 
@@ -220,51 +221,20 @@ async def handle_vectorize_image_event(task: Task, session: AsyncSession) -> Non
     # alternativas: una clave ausente solo puede ser corrupción de cola.
     try:
         image_data_uri = payload["image"]
-        text_event_id = uuid.UUID(str(payload["text_event_id"]))
+        project = payload.get("project")
         domain = DomainType(str(payload.get("domain", DomainType.SYSTEM.value)).lower())
         visibility = Visibility(str(payload.get("visibility", Visibility.PRIVATE.value)).lower())
     except (KeyError, ValueError, TypeError) as contract_error:
         raise ValueError(
             f"El payload de la tarea {task.id} no cumple el contrato "
-            f"vectorize_image_event (image como data URI base64 + text_event_id). "
-            f"La frontera ya valida y normaliza la forma en el dispatch: esto solo "
-            f"puede ser corrupción de cola. Detalle: {contract_error}"
+            f"vectorize_image_event (image como data URI base64 + project "
+            f"opcional + domain + visibility). La frontera ya valida y "
+            f"normaliza la forma en el dispatch: esto solo puede ser "
+            f"corrupción de cola. Detalle: {contract_error}"
         ) from contract_error
 
     # =================================================================
-    # FASE 3: Validación de la Referencia Textual (regla 2 del bypass cercado)
-    # =================================================================
-    # El registro textual es la fuente relacional de verdad: sin él, este
-    # vector sería huérfano y el cron de purga perdería su significado.
-    text_stmt = select(Task).where(Task.id == text_event_id)
-    text_result = await session.execute(text_stmt)
-    text_task = text_result.scalar_one_or_none()
-
-    if not text_task:
-        raise ValueError(
-            f"La tarea {task.id} referencia un registro textual inexistente: la "
-            f"tarea {text_event_id} no existe en Postgres. El vector de imagen "
-            f"sería huérfano (regla 2 del bypass cercado, ADR-007)."
-        )
-
-    referenced_type = (text_task.payload or {}).get("task_type")
-    if referenced_type != TaskType.VECTORIZE_EVENT.value:
-        raise ValueError(
-            f"La tarea {task.id} referencia la tarea {text_event_id}, que NO es "
-            f"vectorize_event (task_type: {referenced_type!r}). El vector de "
-            f"imagen debe anclarse al registro textual de la misma pieza."
-        )
-
-    if text_task.status != TaskStatus.COMPLETED:
-        raise ValueError(
-            f"La tarea {task.id} referencia el registro textual {text_event_id}, "
-            f"que todavía NO está COMPLETED (estado: {text_task.status}). Respeta "
-            f"el write-then-read: consulta coreai_get_task hasta COMPLETED antes "
-            f"de despachar la imagen."
-        )
-
-    # =================================================================
-    # FASE 4: Inyección de Dependencias
+    # FASE 3: Inyección de Dependencias
     # =================================================================
     try:
         qdrant_client = await get_qdrant_client()
@@ -274,7 +244,7 @@ async def handle_vectorize_image_event(task: Task, session: AsyncSession) -> Non
         llm_client = LLMClient()
 
         # =================================================================
-        # FASE 5: Embedding vía GATEWAY LiteLLM (entrada image-embedding)
+        # FASE 4: Embedding vía GATEWAY LiteLLM (entrada image-embedding)
         # =================================================================
         # La legibilidad/decodificación real de la imagen es fallo legítimo
         # de esta fase (asíncrono), no de contrato: si el data URI no es
@@ -307,17 +277,19 @@ async def handle_vectorize_image_event(task: Task, session: AsyncSession) -> Non
         )
 
         # =================================================================
-        # FASE 6: Upsert a la colección de imágenes (espacio propio, #50)
+        # FASE 5: Upsert a la colección de imágenes (espacio propio, #50)
         # =================================================================
         # El punto ES la tarea de imagen (idempotencia por re-dispatch:
-        # imágenes distintas = tareas distintas). La imagen NO viaja en el
-        # payload del punto: la fuente vive en el cliente de borde y su
-        # ancla relacional es el registro textual referenciado.
+        # imágenes distintas = tareas distintas). El payload ancla el
+        # vector a su sesión (la correlación texto↔imagen ES la sesión) y
+        # al proyecto (FR-3 #51: dato del inquilino en el propio evento).
+        # La imagen NO viaja en el payload: el vector es dato derivado.
         point_payload = {
             "tenant_id": str(entity_id),
-            "text_event_id": str(text_event_id),
+            "session_id": str(task.session_id),
             "domain": domain.value,
             "visibility": visibility.value,
+            "project": project,
         }
         await vector_repo.upsert_image(
             point_id=task.id,
@@ -327,9 +299,9 @@ async def handle_vectorize_image_event(task: Task, session: AsyncSession) -> Non
 
         logger.info(
             "  [Worker] Vectorización de imagen completada con éxito para la "
-            "tarea %s (registro textual %s)",
+            "tarea %s (sesión %s)",
             task.id,
-            text_event_id,
+            task.session_id,
         )
 
     except ValueError as validation_error:
