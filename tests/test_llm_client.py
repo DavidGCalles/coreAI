@@ -80,3 +80,37 @@ async def test_llm_client_raises_on_http_error():
             await client.generate_embedding(request_data)
         
         assert exc_info.value.response.status_code == 500
+
+@pytest.mark.asyncio
+async def test_llm_client_forwards_modality_for_image_embeddings(mock_litellm_payload):
+    """
+    La entrada image-embedding (BUG-004 #58) viaja con modality='image' en el
+    body: el provider infinity de LiteLLM la necesita para servir el image_embed
+    (jina-clip-v2). Sin ella, el gateway enrutará al modelo de texto.
+    """
+    client = LLMClient()
+    request_data = EmbeddingRequest(
+        model="image-embedding",
+        input="data:image/jpeg;base64,QUJD",
+        modality="image",
+    )
+
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = httpx.Response(
+            status_code=200,
+            json=mock_litellm_payload,
+            request=httpx.Request("POST", "http://dummy-url")
+        )
+        await client.generate_embedding(request_data)
+
+        body = mock_post.call_args.kwargs["json"]
+        assert body["model"] == "image-embedding"
+        assert body["modality"] == "image"
+
+def test_text_embedding_request_stays_byte_identical_without_modality():
+    """
+    Dump con exclude_none: las requests de texto NO llevan modality — el
+    flujo textual queda byte-idéntico tras la entrada del campo (#61).
+    """
+    dump = EmbeddingRequest(model="text-embedding", input="hola").model_dump(exclude_none=True)
+    assert dump == {"model": "text-embedding", "input": "hola"}

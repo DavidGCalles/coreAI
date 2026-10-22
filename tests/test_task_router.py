@@ -6,6 +6,8 @@ Valida:
 - TASK_REGISTRY mapea correctamente TaskType -> handler
 - route_task valida y ejecuta las tareas correctamente
 - Error handling para casos corruptos o desconocidos
+- Taxonomía de fallo del router separada (hallazgo del smoke 22 oct, #61):
+  tipo fuera de catálogo ≠ tipo contratado sin handler ≠ tipo sin contrato
 """
 
 import pytest
@@ -98,13 +100,14 @@ class TestTaskRegistry:
 
     def test_registry_contains_all_task_types(self):
         """Valida que TASK_REGISTRY tiene entradas para todos los tipos."""
-        assert len(TASK_REGISTRY) == 6
+        assert len(TASK_REGISTRY) == 7
         assert TaskType.EXTRACT_ENTITIES in TASK_REGISTRY
         assert TaskType.INIT_SESSION in TASK_REGISTRY
         assert TaskType.FOLLOW_UP in TASK_REGISTRY
         assert TaskType.DUMMY_TEST_TASK in TASK_REGISTRY
         assert TaskType.VECTORIZE_EVENT in TASK_REGISTRY
         assert TaskType.CONSOLIDATE_MEMORY in TASK_REGISTRY
+        assert TaskType.VECTORIZE_IMAGE_EVENT in TASK_REGISTRY
 
     def test_registry_maps_extract_entities(self):
         """Valida el mapping correcto para extract_entities."""
@@ -130,6 +133,13 @@ class TestTaskRegistry:
         handler = TASK_REGISTRY.get(TaskType.DUMMY_TEST_TASK)
         assert handler is not None
         assert handler.__name__ == "handle_dummy_test_task"
+
+    def test_registry_maps_vectorize_image_event(self):
+        """Valida el mapping correcto para vectorize_image_event (ADR-007-003, #61)."""
+        handler = TASK_REGISTRY.get(TaskType.VECTORIZE_IMAGE_EVENT)
+        assert handler is not None
+        assert handler.__name__ == "handle_vectorize_image_event"
+        assert callable(handler)
 
 
 class TestRouteTask:
@@ -204,6 +214,61 @@ class TestRouteTask:
             await route_task(task, AsyncMock())
 
         assert "desconocido" in str(exc_info.value).lower()
+
+
+class TestRouteTaskErrorTaxonomy:
+    """Taxonomía de fallo separada (hallazgo del smoke 22 oct, #61).
+
+    Para el DLQ (#30) no es lo mismo: un tipo nunca visto, un tipo
+    CONTRATADO sin handler (brecha de implementación) y un tipo del
+    esquema sin contrato (no despachable). Tres clases, tres mensajes.
+    """
+
+    @pytest.mark.asyncio
+    async def test_unknown_type_cites_dispatchable_catalog(self):
+        """Un tipo fuera de catálogo cita los tipos despachables (autocorrección)."""
+        task = Task(id=uuid.uuid4())
+        task.payload = {"task_type": "banana"}
+
+        with pytest.raises(ValueError) as exc_info:
+            await route_task(task, AsyncMock())
+
+        assert "banana" in str(exc_info.value)
+        # El catálogo contratado viaja en el mensaje
+        assert "vectorize_image_event" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_contracted_type_without_handler_is_implementation_gap(self):
+        """Tipo CONTRATADO sin handler ≠ tipo fuera de catálogo: brecha de implementación."""
+        task = Task(id=uuid.uuid4())
+        task.payload = {"task_type": "vectorize_image_event"}
+
+        removed = TASK_REGISTRY.pop(TaskType.VECTORIZE_IMAGE_EVENT)
+        try:
+            with pytest.raises(NotImplementedError) as exc_info:
+                await route_task(task, AsyncMock())
+            assert "CONTRATADO" in str(exc_info.value)
+            assert "brecha de implementación" in str(exc_info.value)
+            # NO miente: el tipo no está fuera de catálogo
+            assert "desconocido" not in str(exc_info.value).lower()
+        finally:
+            TASK_REGISTRY[TaskType.VECTORIZE_IMAGE_EVENT] = removed
+
+    @pytest.mark.asyncio
+    async def test_schema_type_without_contract_is_not_dispatchable(self):
+        """Tipo del esquema SIN contrato (stub): mensaje distinto de la brecha."""
+        task = Task(id=uuid.uuid4())
+        task.payload = {"task_type": "init_session"}
+
+        removed = TASK_REGISTRY.pop(TaskType.INIT_SESSION)
+        try:
+            with pytest.raises(NotImplementedError) as exc_info:
+                await route_task(task, AsyncMock())
+            assert "SIN contrato" in str(exc_info.value)
+            assert "init_session" in str(exc_info.value)
+            assert "CONTRATADO" not in str(exc_info.value)
+        finally:
+            TASK_REGISTRY[TaskType.INIT_SESSION] = removed
 
 
 class TestRouteTaskIntegration:
