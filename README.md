@@ -12,7 +12,7 @@
 - **Memoria unificada** — PostgreSQL (UUIDs, entidades/eventos/relaciones) es la fuente de verdad; Qdrant contiene vectores derivados: nunca texto sin respaldo relacional.
 - **Ingesta unificada (ADR-005)** — una única apertura de escritura, `coreai_dispatch_task`: las escrituras son eventos que el córtex procesa en asíncrono; la lectura síncrona acotada (`coreai_search_context`, en camino) es la única otra apertura.
 - **Contratos de tarea (ADR-006)** — cada tipo de tarea despachable lleva contrato formal registrado: *sin contrato no hay despacho*.
-- **Memoria multimodal acotada (ADR-007)** — los vectores de imagen viven en colección Qdrant propia con bypass cercado: solo vectores de imagen saltan las tools MCP y cada uno referencia su registro textual; expiry explícito absorbido por la extensión del ADR.
+- **Memoria multimodal acotada (ADR-007)** — la ingesta de imagen va por la event lane como toda escritura (tarea `vectorize_image_event` con contrato ADR-006); sus vectores viven en una colección Qdrant propia (jina-clip-v2, 1024 dims) garantizada al arranque del worker.
 - **Córtex asíncrono sin broker** — cola de tareas sobre PostgreSQL con `SELECT ... FOR UPDATE SKIP LOCKED`.
 
 ## Arquitectura
@@ -35,7 +35,6 @@ flowchart LR
     WORKER -- "evento + memoria" --> PG
     WORKER -- "embedding (texto · imagen)" --> INFINITY
     WORKER -- "upsert vector" --> QDRANT
-    CLIENT -. "image_embed (reconocimiento — ADR-007)" .-> INFINITY
     WORKER -- "LLM (consolidación)" --> LITELLM
     LITELLM --> LLM
     CLIENT -- "chat (API OpenAI-compatible)" --> LITELLM
@@ -125,12 +124,12 @@ scripts/         # prepare_model (+ prepare_clip_kit), schedulers/crontab
 | [003](docs/adr/003-base-observability.md) | Base Observability |
 | [004](docs/adr/004-mcp-tracer-bullet.md) | Tracer Bullet vía MCP (con post-mortem técnico) |
 | [005](docs/adr/005-unified-ingestion-doctrine.md) | Doctrina de Ingesta Unificada — escrituras vía event lane; única apertura síncrona read-only (en camino, #37) |
-| [006](docs/adr/006-mcp-contracts.md) | Contratos de Tarea MCP — validación síncrona en la frontera y exposición como resources |
-| [007](docs/adr/007-multimodal-memory.md) | Memoria Multimodal — adopción anticipada y acotada (identificación visual, demo ELIOS) |
+| [006](docs/adr/006-mcp-contracts.md) | Contratos de Tarea MCP — validación síncrona en la frontera y exposición como resources (✅ implementado, 23 oct) |
+| [007](docs/adr/007-multimodal-memory.md) | Memoria Multimodal — adopción anticipada y acotada (identificación visual, demo ELIOS) (✅ implementado, 23 oct) |
 
 ## Estado del proyecto
 
-En desarrollo activo. El **Epic 4: Córtex Asíncrono** (issue #26) está en main desde el 21 de octubre — el sustrato expone `coreai_dispatch_task` + `coreai_get_task` (el recall read-only `coreai_search_context` vuelve con [ADR-005-002] #37) — y el epic permanece abierto hasta que aterricen los pospuestos (4.3 #29, 4.4 #30, [ADR-006-002] #42). En paralelo, la memoria multimodal (ADR-007) está en ejecución: `jina-clip-v2` ya sirve image embeddings en el edge.
+En desarrollo activo. El **Epic 4: Córtex Asíncrono** (issue #26) está en main desde el 21 de octubre — el sustrato expone `coreai_dispatch_task` + `coreai_get_task` (el recall read-only `coreai_search_context` vuelve con [ADR-005-002] #37) — y el epic permanece abierto hasta que aterricen los pospuestos (4.3 #29, 4.4 #30). El **ADR-006 (contratos de tarea)** y el **ADR-007 (memoria multimodal)** están implementados y validados E2E (23 oct): tres contratos registrados y publicados como resources, y la tubería de imagen completa — dispatch → contrato → worker → gateway LiteLLM → colección `images` — viva en main.
 
 ---
 

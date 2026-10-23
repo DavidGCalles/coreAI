@@ -1,12 +1,12 @@
 # ADR-006: Contratos de Tarea MCP — Validación Síncrona en la Frontera y Exposición como Resources
 
 ## Status
-Proposed
+Accepted — implementado (23 oct 2026; los cuatro sub-issues cerrados en main)
 
 ## Context and Problem Statement
 El tracer bullet del ADR-004 validó la pasarela de ingesta (`coreai_dispatch_task` → tabla `tasks` → worker), pero el evento de diagnóstico del 18 de octubre de 2026 evidenció el problema estructural que el tracer no podía cubrir (**BUG-002**, #35): los clientes de borde — agentes LLM como Cline — no son capaces de respetar de forma fiable un contrato genérico y anidable. `task_payload` es hoy un `dict[str, Any]` libre y el handler de `VECTORIZE_EVENT` absorbe el caos con extracción resiliente (claves candidatas `content`/`summary_content`/`text`/`data`) — cinta adhesiva que enmascara el problema en vez de resolverlo.
 
-El daño es doble: **(1) feedback loop del borde roto** — un payload que viola el contrato recibe una respuesta de éxito (`task_id`, `PENDING`) y muere minutos después en el worker, con la traza enterrada en `payload.error_trace` que el agente jamás volverá a ver; **(2) poison pills para la cola** — una violación de contrato es determinista, así que cuando el Issue 4.4 (retries/Exponential Backoff/DLQ) aterrice, cualquier validación que viva solo en el handler convertirá la confusión del cliente en basura previsible que revienta los reintentos.
+El daño es doble: **(1) feedback loop del borde roto** — un payload que viola el contrato recibe una respuesta de éxito (`task_id`, `PENDING`) y muere minutos después en el worker, con la traza enterrada en `payload.error_trace` que el agente jamás volverá a ver; **(2) poison pills para la cola** — una violación de contrato es determinista, así que cuando el Issue 4.4 (retries/Exponential Backoff/DLQ) aterrice, cualquier validación que viva solo en el handler convertirá la confusión del cliente en basura previsible que reviente los reintentos.
 
 Además, el Issue 4.3 requiere formalizar el contrato de `vectorize_event`; cerrarlo con el contrato implícito en el handler supondría construirlo una segunda vez con riesgo de drift. ELIOS, como primer cliente del sustrato, necesita descubrir los contratos en runtime en lugar de hardcodear formas de payload.
 
@@ -34,6 +34,14 @@ Vallas de alcance: `TaskType` cerrado por ahora (sin decidir la apertura de cat�
 *   **Dependencia del path de error inline.** Clientes MCP con soporte pobre de resources dependen del error inline para autocorregirse; el resource queda como camino óptimo, no obligatorio.
 *   **Dos capas de validación vivas.** Frontera (forma) + handler (semántica) coexisten permanentemente; se asume como defensa en profundidad, con su coste de mantenimiento.
 
+## Post-implementación (23 oct 2026)
+
+- **Registro vivo en producción** (`src/contracts/registry.py`): tres contratos registrados — `vectorize_event`, `consolidate_memory` y `vectorize_image_event`. El patrón absorbió el primer tipo multimodal ([ADR-007-003] #61, PR #62) sin nuevas superficies de tools: alta de tipo = contrato explícito, como preveía la disciplina del ADR.
+- **La frontera también valida decodificabilidad** (nacida en #61): para la imagen, el contrato valida en el dispatch que los bytes decodifiquen completos con Pillow — el mismo oráculo que el consumidor final (`infinity_emb`): lo que pasa el dispatch es embeddeable por construcción. La defensa en profundidad queda en tres niveles: forma en la frontera, decodificabilidad en la frontera, semántica en el handler.
+- **Higiene de las superficies cliente** (lección de la review de la PR #62, 23 oct): las descripciones servidas por `schema()` y `catalog()` no llevan numeración de desarrollo (ADR/FR/issues/E2E) — lo que el cliente descubre está limpio de documentos internos.
+- **Taxonomía de fallo del router materializada** (PR #62): tipo fuera-de-catálogo (cita los despachables) ≠ tipo CONTRATADO sin handler (brecha de implementación) ≠ tipo del esquema sin contrato (solo corrupción de cola) — la clase no reintegrable del Issue 4.4 ya tiene a sus tres vecinos separados en el worker.
+- **Deuda viva heredada del duct tape:** la extracción tolerante del handler de `vectorize_event` sigue como backstop semántico — su purga es micro-tarea del Issue 4.3 (#29), no de este ADR.
+
 ## Related
 *   ADR-005 (#36) — Doctrina de Ingesta Unificada.
 *   Issue 4.3 (#29) — Implementación de Handlers Cognitivos (`vectorize_event` como bala trazadora del sistema de contratos).
@@ -44,14 +52,14 @@ Vallas de alcance: `TaskType` cerrado por ahora (sin decidir la apertura de cat�
 
 # ISSUES
 
-### [ADR-006-001] Registro de Contratos de Tarea (Task Contract Registry) — #43
+### [ADR-006-001] Registro de Contratos de Tarea (Task Contract Registry) — #43 — ✅ Cerrado (PR #45, 19 oct)
 Registro central de contratos como única fuente de verdad: `validate`/`schema`/`list()` servidos del mismo objeto; contratos formales para `vectorize_event` y `consolidate_memory`; sin contrato no hay despacho (error explícito). Fixture de contrato para `dummy_test_task` en la suite del tracer del ADR-004.
 
-### [ADR-006-002] Exposición de Contratos como MCP Resources (Descubrimiento antes que Aplicación) — #42
+### [ADR-006-002] Exposición de Contratos como MCP Resources (Descubrimiento antes que Aplicación) — #42 — ✅ Cerrado (PR #60, 22 oct)
 Recurso catálogo `coreai://contracts/tasks` + template `coreai://contracts/tasks/{task_type}`, servido desde el registro.
 
-### [ADR-006-003] Validación Síncrona de Contrato en el Dispatch (Frontera de la Tool) — #44
+### [ADR-006-003] Validación Síncrona de Contrato en el Dispatch (Frontera de la Tool) — #44 — ✅ Cerrado (PR #52, 20 oct)
 `coreai_dispatch_task` valida forma en la tool call; violación → `isError=True` con contrato inline + URI del resource.
 
-### [ADR-006-004] Bala Trazadora del Sistema de Contratos: `vectorize_event` (desbloqueo del Issue 4.3) — #41
+### [ADR-006-004] Bala Trazadora del Sistema de Contratos: `vectorize_event` (desbloqueo del Issue 4.3) — #41 — ✅ Cerrado (vertical viva E2E)
 El handler de `vectorize_event` consumiendo su contrato registrado; retira la extracción resiliente con claves candidatas.
