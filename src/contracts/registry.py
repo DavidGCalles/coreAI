@@ -50,7 +50,7 @@ class TaskPayloadContract(BaseModel):
 
 
 class VectorizeEventPayload(TaskPayloadContract):
-    """Contrato de `vectorize_event` (Issue 4.3): vectoriza texto = genera su embedding numérico para búsqueda semántica (nada que ver con gráficos vectoriales)."""
+    """Contrato de `vectorize_event`: vectoriza texto = genera su embedding numérico para búsqueda semántica (nada que ver con gráficos vectoriales)."""
 
     content: str = Field(
         ...,
@@ -63,11 +63,7 @@ class VectorizeEventPayload(TaskPayloadContract):
     project: str | None = Field(
         None,
         min_length=1,
-        description=(
-            "Metadato FR-3 (#51): proyecto de procedencia del registro. "
-            "Opcional. Dato del inquilino, no taxonomía del core — cuando "
-            "lleguen open catalogs, el registry validará los valores per-tenant."
-        ),
+        description="Proyecto de procedencia del registro. Opcional.",
     )
     domain: DomainType = Field(
         default=DomainType.SYSTEM,
@@ -93,19 +89,14 @@ class ConsolidateMemoryPayload(TaskPayloadContract):
     )
 
 
-# --- Validación de decodificabilidad de imagen en frontera (#61, 22 oct) ---
+# --- Validación de decodificabilidad de imagen en frontera (#61) ---
 #
-# Antecedente (hallazgo E2E, tarea 1fefde4a): un stub de 99 BYTES con
-# CABECERA JPEG válida pasó el patrón textual del contrato, encoló y murió
-# asíncrono en Infinity con ImageCorruption — el cliente (un LLM escribiendo
-# base64 a mano) había truncado la imagen. [DAVID] Orden tras el veredicto:
-# la frontera también valida la decodificabilidad. Con Pillow el oráculo es
-# el MISMO que el consumidor final (infinity_emb decodifica con PIL): lo que
-# pasa el dispatch ES decodificable para el handler, por construcción. El
-# agente se autocorrige en el acto (patrón ADR-006) en vez de task FAILED
-# minutos después. El residuo asíncrono queda reducido a corrupción de cola
-# y fallos de infra — nunca a la calidad del dato. Un parser manual de
-# marcadores fue prototipado y DESCARTADO: rebotaba JPEGs legítimos.
+# Hallazgo E2E: un stub de 99 bytes con cabecera JPEG válida pasó el patrón
+# textual y murió asíncrono en Infinity con ImageCorruption. Orden de David:
+# la frontera también valida la decodificabilidad, con Pillow — el mismo
+# oráculo que infinity_emb, así lo que pasa el dispatch es embeddeable por
+# construcción. Un parser manual de marcadores fue descartado: rebotaba
+# JPEGs legítimos.
 
 _FORMATO_PIL_POR_MIME = {
     "jpeg": "JPEG",
@@ -152,37 +143,25 @@ def _validar_imagen_raster(data_uri: str) -> str | None:
 
 
 class VectorizeImageEventPayload(TaskPayloadContract):
-    """Contrato de `vectorize_image_event` (ADR-007-003, #61): vectoriza una imagen = genera su embedding numérico para búsqueda semántica (nada que ver con gráficos vectoriales/SVG — raster-only, el SVG rebota en la frontera). Evento auto-anclado (decisión 22 oct): la tarea de imagen YA es el evento relacional — la correlación con el registro textual de la misma pieza la da la sesión, no una referencia encadenada a otra tarea. La imagen se valida DECODIFICABLE en frontera con Pillow (hallazgo E2E 22 oct: un stub de 99 bytes con cabecera JPEG pasó el patrón y murió asíncrono en Infinity) — mismo oráculo que el consumidor final."""
+    """Contrato de `vectorize_image_event`: vectoriza una imagen raster = genera su embedding numérico para búsqueda semántica (nada que ver con gráficos vectoriales/SVG — raster-only). La imagen viaja como data URI base64, autocontenida, y se valida decodificable y completa en el dispatch."""
 
     image: str = Field(
         ...,
         pattern=r"^data:image/(?:jpeg|jpg|png|webp|gif|bmp);base64,[A-Za-z0-9+/]+={0,2}$",
         description=(
-            "Imagen EXCLUSIVAMENTE como data URI base64 de un formato RASTER "
-            "decodificable (jpeg|jpg|png|webp|gif|bmp). Los SVG y gráficos "
-            "vectoriales REBOTAN aquí: vectorizar = generar el embedding "
-            "NUMÉRICO para búsqueda semántica, y un SVG no puede producirlo. "
-            "Sin paths: el payload debe ser autocontenido y "
-            "location-independent — qué filesystem lee un path lo decide el "
-            "cliente que ejecuta la request, ambigüedad inaceptable en un "
-            "sistema distribuido. El cuerpo base64 es alfabeto estricto "
-            "anclado al final: basura tras la coma rebota ANTES de encolarse. "
-            "La DECODIFICABILIDAD de los bytes se valida aquí mismo con "
-            "Pillow — el mismo oráculo que Infinity: un stub truncado (p. "
-            "ej. 99 bytes de cabecera JPEG sin final del archivo) rebota "
-            "SÍNCRONO en el dispatch (patrón ADR-006: el agente se "
-            "autocorrige en el acto), no muere asíncrono en el lane."
+            "Imagen raster como data URI base64 (jpeg|jpg|png|webp|gif|bmp). "
+            "Los SVG y gráficos vectoriales no son válidos: vectorizar = "
+            "generar el embedding numérico para búsqueda semántica. Sin "
+            "paths: el payload debe ser autocontenido. La imagen debe ser "
+            "decodificable y completa — se valida en el dispatch."
         ),
     )
     project: str | None = Field(
         None,
         min_length=1,
         description=(
-            "Metadato FR-3 (#51): proyecto de procedencia del registro. "
-            "Opcional. Dato del inquilino, no taxonomía del core — cuando "
-            "lleguen open catalogs, el registry validará los valores "
-            "per-tenant. El evento de imagen es auto-anclado: su proyecto "
-            "viaja AQUÍ, no en un registro textual referenciado."
+            "Proyecto de procedencia del registro. Opcional. Viaja en el "
+            "propio evento de imagen."
         ),
     )
     domain: DomainType = Field(
@@ -201,12 +180,8 @@ class VectorizeImageEventPayload(TaskPayloadContract):
         problema = _validar_imagen_raster(value)
         if problema is not None:
             raise ValueError(
-                f"{problema}. El data URI debe llevar la imagen RASTER completa "
-                f"codificada en base64 íntegra — no un fragmento: un stub "
-                f"truncado pasa el patrón textual pero no es embeddeable y "
-                f"moriría asíncrono en el modelo de visión con ImageCorruption "
-                f"(#61, hallazgo E2E 22 oct: stub de 99 bytes con cabecera "
-                f"JPEG). Relee el archivo completo y envía su base64 íntegro."
+                f"{problema}. Relee el archivo completo y envía su base64 "
+                f"íntegra: un fragmento truncado no es una imagen embeddeable."
             )
         return value
 

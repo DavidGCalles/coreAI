@@ -8,9 +8,8 @@ class EmbeddingRequest(BaseModel):
     modality: str | None = Field(
         None,
         description=(
-            "Modalidad del embedding: 'image' para la entrada image-embedding "
-            "(provider infinity, BUG-004 #58). None = texto. Solo viaja al "
-            "gateway cuando está fijado (dump con exclude_none)."
+            "Modalidad del embedding: 'image' para imágenes, None = texto. "
+            "Solo viaja al gateway cuando está fijada."
         ),
     )
 

@@ -45,18 +45,12 @@ model_list:
       rpm: 1000
 
 router_settings:
-  # Los fallbacks referencian GRUPOS (model_name) en la CLAVE, nunca ids
-  # de modelo: una CLAVE por id muere en el router con «You passed in
-  # model=data/clip_model. There are no healthy deployments» y su ruido
-  # enmascara la causa real del error que ve el worker (hallazgo E2E 22
-  # oct, #61).
-  # [DAVID, 22 oct, #61]: grupo de fallback de image-embedding RESTAURADO
-  # por orden expresa tras el E2E. litellm/infinity enrutan correctamente
-  # (stress test tocando los 3 grupos); la tarea muere con error de
-  # petición y la causa se investiga en la llamada del worker. El objetivo
-  # de la cadena es «data/clip_model», como estaba antes de 74a7415.
-  # text-embedding se queda SIN fallback: no existe espacio alternativo y
-  # caer a otra dimensión rompería la consulta.
+  # Fallbacks: la clave es un GRUPO (model_name), nunca un id de modelo —
+  # un id muere en el router («no healthy deployments») y su ruido
+  # enmascara la causa real del error. image-embedding → «data/clip_model»
+  # ([DAVID]: restaurado tras el E2E del 22 oct). text-embedding SIN
+  # fallback: no hay espacio alternativo y otra dimensión rompería la
+  # consulta.
   fallbacks:
     - "crewai-proxy": ["local-fallback"]
     - "router-model": ["local-fallback"]
