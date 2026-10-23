@@ -1,0 +1,14 @@
+# Cercado del contexto de build SOLO para el Dockerfile de servicios
+# (core-mcp / worker-node). Regla de BuildKit: este archivo tiene prioridad
+# sobre .dockerignore cuando se construye con "Dockerfile" — y Dockerfile.infinity
+# NO lo usa: ese build sigue con .dockerignore global, donde models/ entra
+# porque Infinity hornea los pesos por diseño (ADR-007-001 #49).
+.git
+.venv
+venv
+models
+hf-modules
+scratch
+data
+__pycache__
+*.pyc

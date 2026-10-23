@@ -5,6 +5,13 @@ from typing import Any
 class EmbeddingRequest(BaseModel):
     model: str = Field(..., description="El nombre del modelo enrutado en LiteLLM")
     input: str | list[str] = Field(..., description="El texto o textos a vectorizar")
+    modality: str | None = Field(
+        None,
+        description=(
+            "Modalidad del embedding: 'image' para imágenes, None = texto. "
+            "Solo viaja al gateway cuando está fijada."
+        ),
+    )
 
 class EmbeddingUsage(BaseModel):
     prompt_tokens: int

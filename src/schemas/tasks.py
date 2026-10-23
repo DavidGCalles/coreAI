@@ -12,6 +12,7 @@ class TaskType(StrEnum):
     DUMMY_TEST_TASK = "dummy_test_task"
     VECTORIZE_EVENT = "vectorize_event"
     CONSOLIDATE_MEMORY = "consolidate_memory"
+    VECTORIZE_IMAGE_EVENT = "vectorize_image_event"
 
 class TaskDispatchRequest(BaseModel):
     """
