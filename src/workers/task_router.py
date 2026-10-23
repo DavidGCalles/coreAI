@@ -83,8 +83,10 @@ async def handle_dummy_test_task(task: Task, session: AsyncSession) -> None:
 async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
     """
     Manejador para tareas de vectorización de eventos.
-    Extrae la relación jerárquica desde Postgres, busca el contenido de forma flexible,
-    y asimila la memoria en el grafo híbrido.
+    Extrae la relación jerárquica desde Postgres, lee el contenido con
+    extracción ESTRICTA por contrato (ADR-006: la frontera ya validó y
+    normalizó el payload en el dispatch), y asimila la memoria en el grafo
+    híbrido.
     """
     logger.info("  [Worker] Vectorizando evento para la tarea %s", task.id)
 
@@ -107,19 +109,21 @@ async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
     entity_id = db_session.entity_id
 
     # =================================================================
-    # FASE 2: Extracción Resiliente (Protección contra alucinaciones de claves)
+    # FASE 2: Extracción Estricta (purga de la extracción tolerante, 4.3)
     # =================================================================
-    content = None
-    # Buscamos en una lista de candidatos comunes en lugar de forzar una sola clave
-    for candidate_key in ["content", "summary_content", "text", "data", "detailed_summary"]:
-        if candidate_key in payload and payload[candidate_key]:
-            content = payload[candidate_key]
-            break
-
+    # La frontera ya validó y normalizó el payload contra el contrato
+    # (VectorizeEventPayload) en el dispatch: 'content' es clave obligatoria
+    # y única. La lista de claves candidatas era un backstop de la era
+    # pre-contratos (decisión ADR-006): hoy es código inalcanzable para
+    # payloads legítimos y solo puede enmascarar corrupción de cola. Una
+    # clave ausente NO es flexibilidad: es corrupción.
+    content = payload.get("content")
     if not content:
         raise ValueError(
-            f"No se encontró texto para vectorizar. Claves buscadas: "
-            f"content, summary_content, text, data. Payload actual: {payload}"
+            f"El payload de la tarea {task.id} no trae 'content' (contrato "
+            f"vectorize_event). La frontera ya valida y normaliza la forma "
+            f"en el dispatch: esto solo puede ser corrupción de cola. "
+            f"Payload actual: {payload}"
         )
 
     domain_str = payload.get("domain", "SYSTEM")

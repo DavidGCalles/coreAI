@@ -4,7 +4,7 @@ Tests unitarios para handle_vectorize_event (Epic 4 - Issue 4.3)
 Aísla exclusivamente la lógica algorítmica del handler sin interactuar con la cola.
 Valida:
 - Extracción de jerarquía relacional (Task -> Session -> Entity) con mocks síncronos/asíncronos.
-- Búsqueda resiliente de claves de contenido.
+- Extracción estricta por contrato: solo 'content' (ADR-006 — purga de la extracción tolerante).
 - Inyección de dependencias limpia (Qdrant global).
 - Delegación exitosa a HybridMemoryManager.add_memory() mediante kwargs.
 """
@@ -25,14 +25,14 @@ from src.workers.task_router import handle_vectorize_event
 
 @pytest.fixture
 def pending_vectorize_task():
-    """Crea una tarea PENDING simulando la entrada de un LLM (usando summary_content)."""
+    """Crea una tarea PENDING con payload normalizado por la frontera (clave 'content')."""
     return Task(
         id=uuid.UUID('f47ac10b-58cc-4372-a567-0e02b2c3d479'),
         session_id=uuid.UUID('11111111-1111-1111-1111-111111111111'),
         status=TaskStatus.PENDING,
         payload={
             "task_type": TaskType.VECTORIZE_EVENT.value,
-            "summary_content": "Memoria determinista y resiliente.",
+            "content": "Memoria determinista y resiliente.",
             "domain": "SYSTEM",
             "visibility": "PRIVATE"
         }
@@ -41,7 +41,7 @@ def pending_vectorize_task():
 
 @pytest.fixture
 def missing_content_task():
-    """Crea una tarea cuyo payload no tiene ningún campo de texto válido."""
+    """Crea una tarea cuyo payload no trae 'content': solo corrupción de cola."""
     return Task(
         id=uuid.uuid4(),
         session_id=uuid.uuid4(),
@@ -122,7 +122,8 @@ async def test_handle_vectorize_event_raises_on_missing_session(pending_vectoriz
 @pytest.mark.asyncio
 async def test_handle_vectorize_event_raises_on_missing_content(missing_content_task):
     """
-    Test de resiliencia de payload: Si no hay texto, no hay vector.
+    Test de extracción estricta: si la clave 'content' del contrato no está,
+    no hay vector — y el error lo dice sin buscar claves alternativas.
     """
     session_mock = AsyncMock()
     
@@ -136,4 +137,5 @@ async def test_handle_vectorize_event_raises_on_missing_content(missing_content_
     with pytest.raises(ValueError) as exc_info:
         await handle_vectorize_event(missing_content_task, session_mock)
     
-    assert "No se encontró texto para vectorizar" in str(exc_info.value)
+    assert "no trae 'content'" in str(exc_info.value)
+    assert "corrupción de cola" in str(exc_info.value)
