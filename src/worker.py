@@ -30,18 +30,38 @@ async def worker_loop():
                     # Hay trabajo: atacamos y reseteamos el backoff
                     backoff = INITIAL_BACKOFF
                     
+                    # Ids capturados ANTES de ejecutar (hallazgo E2E 22 oct, #61):
+                    # el handler es dueño del ciclo de vida de la sesión y su
+                    # cortafuegos (rollback en fallos de ejecución) EXPIRA la
+                    # instancia task. Tocar task.* después de un rollback dispara
+                    # un refresh síncrono en contexto async (greenlet_spawn) que
+                    # revienta el fail path y deja la tarea huérfana en RUNNING.
+                    # Con el id capturado, el fallo de ejecución SIEMPRE aterriza
+                    # en fail_task (que ya trabaja por UUID, sin tocar el ORM).
+                    task_id = task.id
+                    
                     try:
                         # Fase 2: Trabajo en memoria delegando al Enrutador (Registry)
                         await route_task(task, session)
                         
                         # Fase 3 (Éxito)
-                        await repo.complete_task(task.id)
-                        logger.info("Tarea %s COMPLETED", task.id)
+                        await repo.complete_task(task_id)
+                        logger.info("Tarea %s COMPLETED", task_id)
                         
                     except Exception as execution_error:
                         # Fase 3 (Fallo controlado de negocio)
-                        logger.error("Fallo ejecutando tarea %s: %s", task.id, execution_error)
-                        await repo.fail_task(task.id, str(execution_error))
+                        logger.error("Fallo ejecutando tarea %s: %s", task_id, execution_error)
+                        # Trace HONESTO (#61): clase + mensaje de la excepción real.
+                        # str(e) a secas perdía la clase (un httpx.ConnectError quedaba
+                        # como «Connection refused» sin culpable, y una excepción sin
+                        # mensaje como trace vacío). No se vuelca el traceback
+                        # completo: el JSONB del payload ya viaja cargado con la
+                        # data URI; el diagnóstico de una línea es el contrato de
+                        # coreai_get_task.
+                        await repo.fail_task(
+                            task_id,
+                            f"{type(execution_error).__name__}: {execution_error}",
+                        )
                 else:
                     # Cola vacía: relajamos el polling progresivamente
                     await asyncio.sleep(backoff)

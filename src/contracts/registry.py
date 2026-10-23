@@ -8,10 +8,15 @@ catalog(). Regla estructural: ningún tipo es despachable sin contrato registrad
 Racional y decisiones: ADR-006 (docs/adr/006-mcp-contracts.md) y PR #52.
 """
 
+import base64
+import binascii
 import inspect
+import io
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Any
+
+from PIL import Image
 
 from src.schemas.tasks import TaskType
 from src.schemas.memory import DomainType, Visibility
@@ -45,12 +50,20 @@ class TaskPayloadContract(BaseModel):
 
 
 class VectorizeEventPayload(TaskPayloadContract):
-    """Contrato de `vectorize_event` (Issue 4.3)."""
+    """Contrato de `vectorize_event`: vectoriza texto = genera su embedding numérico para búsqueda semántica (nada que ver con gráficos vectoriales)."""
 
     content: str = Field(
         ...,
         min_length=1,
-        description="Texto canónico a vectorizar. Clave obligatoria y única de contenido.",
+        description=(
+            "Texto canónico cuyo embedding numérico se generará para búsqueda "
+            "semántica. Clave obligatoria y única de contenido."
+        ),
+    )
+    project: str | None = Field(
+        None,
+        min_length=1,
+        description="Proyecto de procedencia del registro. Opcional.",
     )
     domain: DomainType = Field(
         default=DomainType.SYSTEM,
@@ -74,6 +87,103 @@ class ConsolidateMemoryPayload(TaskPayloadContract):
         min_length=1,
         description="Ventana temporal de consolidación (p. ej. '7d'). Obligatorio.",
     )
+
+
+# --- Validación de decodificabilidad de imagen en frontera (#61) ---
+#
+# Hallazgo E2E: un stub de 99 bytes con cabecera JPEG válida pasó el patrón
+# textual y murió asíncrono en Infinity con ImageCorruption. Orden de David:
+# la frontera también valida la decodificabilidad, con Pillow — el mismo
+# oráculo que infinity_emb, así lo que pasa el dispatch es embeddeable por
+# construcción. Un parser manual de marcadores fue descartado: rebotaba
+# JPEGs legítimos.
+
+_FORMATO_PIL_POR_MIME = {
+    "jpeg": "JPEG",
+    "jpg": "JPEG",
+    "png": "PNG",
+    "webp": "WEBP",
+    "gif": "GIF",
+    "bmp": "BMP",
+}
+
+
+def _validar_imagen_raster(data_uri: str) -> str | None:
+    """Valida que el data URI lleve una imagen raster decodificable COMPLETA.
+
+    Devuelve None si los bytes decodifican con PIL y el formato casa con el
+    mime declarado; si no, un mensaje de diagnóstico para el error de contrato.
+    """
+    cabecera, _, cuerpo = data_uri.partition(",")
+    mime = cabecera.removeprefix("data:image/").removesuffix(";base64")
+    try:
+        raw = base64.b64decode(cuerpo, validate=True)
+    except (binascii.Error, ValueError) as error:
+        return f"el cuerpo base64 no decodifica ({error}) — data URI corrupto"
+    try:
+        with Image.open(io.BytesIO(raw)) as imagen:
+            # load() fuerza la decodificación COMPLETA: un archivo truncado
+            # revienta justo aquí, no en el lane asíncrono.
+            imagen.load()
+            formato = imagen.format
+    except Exception as error:
+        # UnidentifiedImageError / OSError("image file is truncated") /
+        # DecompressionBombError: nada de esto es embeddeable.
+        return (
+            f"los {len(raw)} bytes decodificados no son una imagen raster "
+            f"decodificable ({type(error).__name__}: {error}) — imagen corrupta "
+            f"o truncada (stub), no un archivo completo"
+        )
+    if formato != _FORMATO_PIL_POR_MIME.get(mime):
+        return (
+            f"el mime declarado ({mime}) no casa con el contenido real "
+            f"({formato or 'desconocido'})"
+        )
+    return None
+
+
+class VectorizeImageEventPayload(TaskPayloadContract):
+    """Contrato de `vectorize_image_event`: vectoriza una imagen raster = genera su embedding numérico para búsqueda semántica (nada que ver con gráficos vectoriales/SVG — raster-only). La imagen viaja como data URI base64, autocontenida, y se valida decodificable y completa en el dispatch."""
+
+    image: str = Field(
+        ...,
+        pattern=r"^data:image/(?:jpeg|jpg|png|webp|gif|bmp);base64,[A-Za-z0-9+/]+={0,2}$",
+        description=(
+            "Imagen raster como data URI base64 (jpeg|jpg|png|webp|gif|bmp). "
+            "Los SVG y gráficos vectoriales no son válidos: vectorizar = "
+            "generar el embedding numérico para búsqueda semántica. Sin "
+            "paths: el payload debe ser autocontenido. La imagen debe ser "
+            "decodificable y completa — se valida en el dispatch."
+        ),
+    )
+    project: str | None = Field(
+        None,
+        min_length=1,
+        description=(
+            "Proyecto de procedencia del registro. Opcional. Viaja en el "
+            "propio evento de imagen."
+        ),
+    )
+    domain: DomainType = Field(
+        default=DomainType.SYSTEM,
+        description="Dominio del evento de imagen. Por defecto 'system'.",
+    )
+    visibility: Visibility = Field(
+        default=Visibility.PRIVATE,
+        description="Nivel de acceso del vector de imagen. Por defecto 'private'.",
+    )
+
+    @field_validator("image")
+    @classmethod
+    def _imagen_decodificable_en_frontera(cls, value: str) -> str:
+        """[DAVID, 22 oct, #61] El contrato exige imagen decodificable, no solo forma."""
+        problema = _validar_imagen_raster(value)
+        if problema is not None:
+            raise ValueError(
+                f"{problema}. Relee el archivo completo y envía su base64 "
+                f"íntegra: un fragmento truncado no es una imagen embeddeable."
+            )
+        return value
 
 
 class TaskContractRegistry:
@@ -145,3 +255,4 @@ task_contract_registry = TaskContractRegistry()
 # Solo los tipos con lógica real registran contrato; los stubs no son despachables.
 task_contract_registry.register(TaskType.VECTORIZE_EVENT, VectorizeEventPayload)
 task_contract_registry.register(TaskType.CONSOLIDATE_MEMORY, ConsolidateMemoryPayload)
+task_contract_registry.register(TaskType.VECTORIZE_IMAGE_EVENT, VectorizeImageEventPayload)

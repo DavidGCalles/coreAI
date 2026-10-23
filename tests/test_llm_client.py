@@ -3,7 +3,7 @@ import httpx
 from unittest.mock import AsyncMock, patch
 
 from src.schemas.llm import EmbeddingRequest, EmbeddingResponse
-from src.managers.llm_client import LLMClient
+from src.managers.llm_client import LLMClient, GatewayHTTPError
 
 # Fixture que simula la estructura exacta que escupe LiteLLM (formato OpenAI)
 @pytest.fixture
@@ -61,8 +61,10 @@ async def test_llm_client_embedding_happy_path(mock_litellm_payload):
 @pytest.mark.asyncio
 async def test_llm_client_raises_on_http_error():
     """
-    Valida que si Infinity muere y LiteLLM devuelve un 500, 
-    el cliente no lo silencia, sino que lo escala violentamente.
+    Valida que si Infinity muere y LiteLLM devuelve un 500, el cliente
+    no lo silencia: lo escala como GatewayHTTPError con la CAUSA en el
+    mensaje. httpx.HTTPStatusError solo diría «500 Bad Request for url»
+    — el error_trace del worker quedaría ciego (ronda 3 del #61).
     """
     client = LLMClient()
     request_data = EmbeddingRequest(model="text-embedding", input="Fallo inminente")
@@ -75,8 +77,49 @@ async def test_llm_client_raises_on_http_error():
         )
         mock_post.return_value = mock_response
 
-        # El cliente DEBE lanzar la excepción HTTP de httpx
-        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        # El cliente DEBE convertir el 4xx/5xx del gateway en GatewayHTTPError
+        with pytest.raises(GatewayHTTPError) as exc_info:
             await client.generate_embedding(request_data)
-        
-        assert exc_info.value.response.status_code == 500
+
+        # La causa real viaja en el mensaje: el trace es un diagnóstico,
+        # no un código de estado.
+        assert "500" in str(exc_info.value)
+        assert "text-embedding" in str(exc_info.value)
+        assert "Downstream model offline" in str(exc_info.value)
+        # La cadena de excepciones conserva la HTTPStatusError original
+        assert isinstance(exc_info.value.__cause__, httpx.HTTPStatusError)
+        assert exc_info.value.__cause__.response.status_code == 500
+
+@pytest.mark.asyncio
+async def test_llm_client_forwards_modality_for_image_embeddings(mock_litellm_payload):
+    """
+    La entrada image-embedding (BUG-004 #58) viaja con modality='image' en el
+    body: el provider infinity de LiteLLM la necesita para servir el image_embed
+    (jina-clip-v2). Sin ella, el gateway enrutará al modelo de texto.
+    """
+    client = LLMClient()
+    request_data = EmbeddingRequest(
+        model="image-embedding",
+        input="data:image/jpeg;base64,QUJD",
+        modality="image",
+    )
+
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = httpx.Response(
+            status_code=200,
+            json=mock_litellm_payload,
+            request=httpx.Request("POST", "http://dummy-url")
+        )
+        await client.generate_embedding(request_data)
+
+        body = mock_post.call_args.kwargs["json"]
+        assert body["model"] == "image-embedding"
+        assert body["modality"] == "image"
+
+def test_text_embedding_request_stays_byte_identical_without_modality():
+    """
+    Dump con exclude_none: las requests de texto NO llevan modality — el
+    flujo textual queda byte-idéntico tras la entrada del campo (#61).
+    """
+    dump = EmbeddingRequest(model="text-embedding", input="hola").model_dump(exclude_none=True)
+    assert dump == {"model": "text-embedding", "input": "hola"}

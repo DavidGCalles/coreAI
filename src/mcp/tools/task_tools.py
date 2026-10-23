@@ -16,11 +16,13 @@ DISPATCH_TOOL_DESCRIPTION = (
     "mutante del sistema entra como tarea asíncrona por esta tool. Semántica "
     "write-then-read: el dispatch devuelve PENDING con task_id y la consistencia "
     "es eventual — consulta el estado por task_id → done, NUNCA lo infier de una "
-    "búsqueda en memoria. Cada task_type tiene un contrato de payload que se "
-    "valida aquí de forma síncrona: si el payload viola el contrato, la llamada "
-    "falla con isError y el contrato inline — clase de fallo NO reintentable (no "
-    "esperes que reintentar lo arregle; corrige el payload). Catálogo de "
-    "contratos: " + CONTRACT_URI_TEMPLATE
+    "búsqueda en memoria. El poll está ACOTADO: uno o dos reintentos con "
+    "coreai_get_task y sigues; NO bloques el bucle esperando el COMPLETED. Cada "
+    "task_type tiene un contrato de payload que se valida aquí de forma "
+    "síncrona: si el payload viola el contrato, la llamada falla con isError y "
+    "el contrato inline — clase de fallo NO reintentable (no esperes que "
+    "reintentar lo arregle; corrige el payload). Catálogo de contratos: "
+    + CONTRACT_URI_TEMPLATE
 )
 
 GET_TASK_TOOL_DESCRIPTION = (
@@ -30,8 +32,9 @@ GET_TASK_TOOL_DESCRIPTION = (
     "dar nada por hecho. COMPLETED → done, no lo reinterpretes. FAILED → la "
     "tarea legítima falló en ejecución (handler, infraestructura): lee "
     "error_trace para diagnosticar — es un fallo del sistema, no de tu "
-    "payload. PENDING/RUNNING → la consistencia es eventual: reintenta la "
-    "consulta más tarde, NUNCA infieras el resultado de una búsqueda en "
+    "payload. PENDING/RUNNING → la consistencia es eventual: ACOTA el poll a "
+    "uno o dos reintentos y sigue con otra cosa, no bloquees al cliente "
+    "esperando el estado; NUNCA infieras el resultado de una búsqueda en "
     "memoria."
 )
 
@@ -68,11 +71,10 @@ def _format_contract_violation(task_type, error: ValidationError) -> str:
     return (
         f"El payload viola el contrato de '{task_type}'. "
         f"La tarea NO se encoló: cero filas nuevas en tasks y ninguna "
-        f"sesión/entidad auto-vivificada para este intento.\n"
-        f"Violaciones:\n"
-        + "\n".join(violations)
-        + f"\nContrato del tipo: {contract_uri(task_type)}. "
-        f"Esquema del contrato: {schema_inline}\n"
+        f"sesión/entidad auto-vivificada para este intento."
+        f"Violaciones:"+ "".join(violations)
+        + f"Contrato del tipo: {contract_uri(task_type)}. "
+        f"Esquema del contrato: {schema_inline}"
         f"Corrige el task_payload para cumplir la esquema y reintenta el dispatch."
     )
 
