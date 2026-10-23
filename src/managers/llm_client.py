@@ -1,9 +1,15 @@
 import httpx
 import logging
-from src.schemas.llm import EmbeddingRequest, EmbeddingResponse
+from src.schemas.llm import EmbeddingRequest, EmbeddingResponse, CompletionRequest, CompletionResponse
 from src.managers.config_manager import config_manager
 
 logger = logging.getLogger(__name__)
+
+# Las completions son trabajo de background del worker (consolidación de
+# memoria, Issue 4.3): un LLM local en CPU puede tardar con holgura más que
+# un embedding, y su latencia no bloquea nada interactivo. Read timeout
+# generoso a propósito, separado del de embeddings.
+COMPLETION_READ_TIMEOUT = 120.0
 
 
 class GatewayHTTPError(RuntimeError):
@@ -56,6 +62,41 @@ class LLMClient:
                 # la causa real; str(e) solo lleva el código de estado. Recorte
                 # a 600 chars: los cuerpos de LiteLLM arrastran ruido de
                 # fallbacks y trazas del router.
+                logger.error(f"Error HTTP del proxy LiteLLM: {e.response.status_code} - {e.response.text}")
+                raise GatewayHTTPError(
+                    f"El proxy LiteLLM devolvió {e.response.status_code} para "
+                    f"'{request_data.model}': {e.response.text[:600]}"
+                ) from e
+            except httpx.RequestError as e:
+                logger.error(f"Fallo de conexión física con el proxy: {e}")
+                raise
+
+    async def generate_completion(self, request_data: CompletionRequest) -> CompletionResponse:
+        """
+        Chat completion vía proxy (mismo cortafuegos que generate_embedding).
+
+        La usa el handler de consolidación de memoria (Issue 4.3) para el
+        resumen denso: el gateway ENRUTA la petición al grupo contratado
+        ('local-fallback' → LM Studio del host), el modelo del inquilino
+        piensa. El CUERPO del error HTTP viaja recortado en la excepción
+        para que el error_trace de la tarea sea un diagnóstico, no un
+        código de estado.
+        """
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, read=COMPLETION_READ_TIMEOUT)
+        ) as client:
+            try:
+                response = await client.post(
+                    f"{self.base_url}/v1/chat/completions",
+                    headers=self.headers,
+                    json=request_data.model_dump(exclude_none=True)
+                )
+                response.raise_for_status()
+
+                # Pydantic parsea y valida el JSON de respuesta
+                return CompletionResponse.model_validate(response.json())
+
+            except httpx.HTTPStatusError as e:
                 logger.error(f"Error HTTP del proxy LiteLLM: {e.response.status_code} - {e.response.text}")
                 raise GatewayHTTPError(
                     f"El proxy LiteLLM devolvió {e.response.status_code} para "

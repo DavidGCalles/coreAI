@@ -1,9 +1,11 @@
 from typing import Generic, TypeVar, Type, Optional, Sequence, Any
 from uuid import UUID
+from datetime import datetime
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.database import Base
 from src.db.models import Entity, Session, Message, Task, Event, LLMAudit, TaskStatus
+from src.schemas.memory import DomainType
 
 # Definimos una variable de tipo vinculada a nuestra base declarativa de SQLAlchemy
 ModelType = TypeVar("ModelType", bound=Base)
@@ -133,6 +135,44 @@ class TaskRepository(BaseRepository[Task]):
 class EventRepository(BaseRepository[Event]):
     def __init__(self, session: AsyncSession):
         super().__init__(Event, session)
+
+    async def list_pending_consolidation(
+        self, entity_id: UUID, domain: DomainType, cutoff: datetime
+    ) -> Sequence[Event]:
+        """
+        Eventos episódicos de un inquilino+dominio anteriores al corte de la
+        ventana temporal y aún no consolidados (Issue 4.3, #29).
+
+        El filtro consolidated=False es la idempotencia de la consolidación:
+        lo ya procesado nunca vuelve a la ventana.
+        """
+        stmt = (
+            select(Event)
+            .where(
+                Event.entity_id == entity_id,
+                Event.domain == domain,
+                Event.consolidated.is_(False),
+                Event.created_at < cutoff,
+            )
+            .order_by(Event.created_at.asc())
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
+    async def mark_consolidated(self, event_ids: Sequence[UUID]) -> int:
+        """
+        Marca los eventos origen como consolidados: UPDATE atómico por UUID,
+        sin instancias ORM (misma forma que fail_task). Devuelve las filas marcadas.
+        """
+        if not event_ids:
+            return 0
+        stmt = (
+            update(Event)
+            .where(Event.id.in_(list(event_ids)))
+            .values({Event.consolidated: True})
+        )
+        result = await self.session.execute(stmt)
+        return result.rowcount
 
 class LLMAuditRepository(BaseRepository[LLMAudit]):
     def __init__(self, session: AsyncSession):
