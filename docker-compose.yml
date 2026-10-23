@@ -57,6 +57,11 @@ services:
     networks:
       - coreai_frontend
       - coreai_backend
+    # BUG-005 (#66): Infinity es el servicio más lento del stack — LiteLLM
+    # no arranca hasta que su provider está cargado de verdad.
+    depends_on:
+      infinity:
+        condition: service_healthy
     logging: *loki-logging
 
   infinity:
@@ -70,6 +75,15 @@ services:
     ports:
       - "8080:8080"
     command: ["--model-id", "/data/model", "--model-id", "/data/nli_model", "--model-id", "/data/clip_model"]
+    # BUG-005 (#66): la carga de los 3 kits vive en el lifespan de FastAPI —
+    # /health (v0.0.78, sin API key) solo responde cuando están cargados:
+    # un 200 ES el ready. One-liner Python: curl no garantizado en la imagen CPU.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request as u; u.urlopen('http://localhost:8080/health', timeout=5)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10m ## carga de e5 + NLI + jina-clip-v2 en CPU: minutos
     networks:
       - coreai_backend
     logging: *loki-logging
@@ -92,6 +106,8 @@ services:
         condition: service_started
       litellm:
         condition: service_started
+      infinity:
+        condition: service_healthy ## BUG-005 (#66)
     command: ["tail", "-f", "/dev/null"]
     networks:
       - coreai_frontend
@@ -112,6 +128,8 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      infinity:
+        condition: service_healthy ## BUG-005 (#66)
     command: ["python", "-m", "src.worker"]
     networks:
       - coreai_frontend
