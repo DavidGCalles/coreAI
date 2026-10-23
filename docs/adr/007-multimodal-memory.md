@@ -1,7 +1,7 @@
 # ADR-007: Memoria Multimodal — Adopción Anticipada para la Demo ELIOS
 
 ## Status
-Proposed
+Accepted — implementado (23 oct 2026; los tres sub-issues cerrados en main)
 
 ## Context and Problem Statement
 
@@ -36,6 +36,14 @@ Lo que este ADR **no** decide: campo `modality` en el schema de memoria, passthr
 - La colección de imágenes es infraestructura que el passthrough genérico posterior puede refactorizar.
 - BUG-001 (#34, inicialización de Qdrant) puede tocar la creación de la colección.
 
+## Post-implementación (23 oct 2026)
+
+- **El bypass cercado quedó absorbido sin llegar a usarse.** El pipe de imagen va entero por el sustrato: `coreai_dispatch_task` (contrato `VectorizeImageEventPayload`) → event lane → handler → gateway LiteLLM (entrada `image-embedding`) → Infinity (`jina-clip-v2`) → colección `images`. Ningún vector de imagen salta las tools MCP: la regla «solo vectores de imagen por bypass» nunca llegó a producción y caduca como deuda.
+- **Desviación respecto al texto de la decisión:** el edge client NO llama a Infinity directamente. La única ruta de embeddings de imagen implementada es la event lane a través del gateway LiteLLM (BUG-004 #58, PR #59): el proveedor infinity de LiteLLM mapea `modality` al endpoint de image embeddings, con enrutado y métricas del gateway.
+- **La colección es garantía de arranque, no creación manual:** un despliegue limpio auto-genera `images` (1024 dims, coseno) — `ensure_collection` idempotente en el worker, antes de consumir la cola (PR #64).
+- **Evento auto-anclado (decisión 22 oct):** la correlación texto↔imagen la da la sesión (`session_id` en el payload del punto), no una referencia encadenada a otra tarea (`text_event_id` eliminado). El `project` (FR-3 #51) viaja en el propio evento; la imagen en sí no se persiste: el vector es dato derivado.
+- **E2E validado (22–23 oct):** stub de 99 bytes rebota SÍNCRONO en el dispatch con diagnóstico de bytes; imagen real (173 KB) → punto de 1024 dims en `images` con factura en `llm_audit`.
+
 ## Related
 *   ADR-005 (#36) — Doctrina de Ingesta Unificada.
 *   ADR-006 (#40) — Contratos de Tarea MCP.
@@ -48,5 +56,8 @@ Lo que este ADR **no** decide: campo `modality` en el schema de memoria, passthr
 ### [ADR-007-001] Infinity: Embeddings de Visión (3er `--model-id`) — #49
 Cerrado (21 oct). Modelo elegido: `jinaai/jina-clip-v2` (dual-encoder EVA02-L + Jina-XLM-R, 1024 dims, 89 idiomas) sirviendo `image_embed` offline (`--model-id /data/clip_model`, `trust_remote_code`). Kit self-contained horneado por `scripts/prepare_clip_kit.py`; pin `transformers==4.51.3` como suelo y techo (el remote code importa `clip_loss`, eliminado en 4.52); `hf-modules/` gitignored y regenerable por script. Latencia CPU ~4,3 s/imagen → el diseño de reconocimiento on-demand queda confirmado (la captura de cámara solo cuando el usuario pregunta; los segundos-CPU aterrizan en el lane asíncrono).
 
-### [ADR-007-002] Colección Qdrant de Imagen — #50
-Abierto. Colección separada con dimensión/espacio propios (1024, similitud coseno); inicialización idempotente; triage del BUG-001 (#34, inicialización de Qdrant) si bloquea la creación.
+### [ADR-007-002] Colección Qdrant de Imagen — #50 — ✅ Cerrado (PR #64, 23 oct)
+Colección separada con dimensión/espacio propios (1024, similitud coseno). Garantizada al arranque del worker: `ensure_collection` idempotente por comparación de nombres (`src/repositories/vector.py`), invocada por `ensure_collections()` en `src/worker.py` ANTES de consumir la cola (backoff de arranque) y con `depends_on: qdrant` en el compose. Triage del BUG-001 (#34): no bloqueó — nota dejada en #34; las colecciones de texto por dominio quedan en el ámbito propio del bug.
+
+### [ADR-007-003] Handler de vectorización de imágenes por event lane — #61 — ✅ Cerrado (PR #62, 23 oct)
+Nuevo `TaskType` `VECTORIZE_IMAGE_EVENT` con contrato `VectorizeImageEventPayload` (data URI base64 raster-only; decodificabilidad validada en frontera con Pillow). El handler vectoriza vía gateway LiteLLM (entrada `image-embedding`, `modality=image` — BUG-004 #58, PR #59) y hace upsert en `images`: el punto ES la tarea; el payload ancla el vector a su `session_id` (correlación texto↔imagen por sesión) y a su `project` (FR-3 #51); la imagen no se persiste. E2E validado el 22 oct (stub de 99 bytes rebota síncrono; imagen real → punto de 1024 dims).
