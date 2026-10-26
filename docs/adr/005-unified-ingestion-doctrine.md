@@ -1,7 +1,7 @@
 # ADR-005: Doctrina de Ingesta Unificada — Escrituras vía Event Lane y Ruta de Lectura Síncrona Acotada
 
 ## Status
-Proposed
+Accepted — implementado (26 oct 2026; [ADR-005-002] #37 aterrizado)
 
 ## Context and Problem Statement
 coreAI expone actualmente dos superficies de ingesta divergentes: (1) el córtex asíncrono (Epic 4) — `coreai_dispatch_task` → tabla `tasks` → motor de workers (`SELECT ... FOR UPDATE SKIP LOCKED`), con semánticas de fallo explícitas (retries, Exponential Backoff, DLQ — Issue 4.4) y observabilidad centralizada (ADR-003); y (2) una superficie síncrona de memoria en `main` (`coreai_store_context` / `coreai_search_context`) que permite a cualquier cliente MCP mutar y consultar la capa de memoria por fuera del sistema de tareas.
@@ -15,7 +15,7 @@ El problema es asimétrico: las escrituras vía tool síncrona violan la doctrin
 ## Decision Outcome
 Toda ingesta mutante de estado entra exclusivamente por `coreai_dispatch_task`. La ingesta de memoria se convierte en una tarea de la clase `VECTORIZE_EVENT`, ejecutada por su handler (Issue 4.3); los handlers son los únicos escritores de la capa de memoria. La superficie síncrona de escritura (`coreai_store_context`) **no se porta** a la línea del córtex.
 
-Una única tool síncrona de recall (`coreai_search_context`, estrictamente read-only) permanece como la **única** apertura síncrona del sistema. El contrato write-then-read es eventualmente consistente por diseño: la completitud se consulta en la tarea (`task_id` → `done`), nunca se infiere de los resultados de búsqueda.
+Una apertura síncrona **acotada** y estrictamente read-only permanece como la única otra apertura del sistema (enmienda 26 oct, #37): dos tools de recall bajo la misma doctrina — `coreai_search_context` (texto) y `coreai_search_image` (imagen, ADR-007). La política vive en `HybridMemoryManager` y las tools son capa fina; el embed de la consulta (texto o imagen) es **efímero y sin auditoría** — la consulta es cómputo, no un dato del inquilino, así que no factura en `llm_audit`; una colección inexistente es un **error explícito** (`MissingCollectionError`), nunca un falso vacío; y los schemas de entrada son planos y cerrados (`extra=forbid`, sin uniones ni anidados — lo que ve el cliente es todo lo que hay). El contrato write-then-read es eventualmente consistente por diseño: la completitud se consulta en la tarea (`task_id` → `done`), nunca se infiere de los resultados de búsqueda.
 
 ### Positive Consequences
 *   **Única lane de escritura auditada.** Toda mutación tiene un UUID de tarea, semánticas de retry/DLQ y traza Loki/LLMAudit — una sola auditoría, sin excepciones.
@@ -40,8 +40,8 @@ Una única tool síncrona de recall (`coreai_search_context`, estrictamente read
 ### [ADR-005-001] Handler de la Event Lane de Ingesta — #38
 Cerrado por absorción: el handler de `VECTORIZE_EVENT` validado E2E dos veces (evento de diagnóstico del 18 oct, smoke del 20 oct); su item de validación en frontera quedó superado y reforzado por ADR-006 (validación de forma en el dispatch).
 
-### [ADR-005-002] Endurecimiento del Recall: `coreai_search_context` estrictamente read-only — #37
-Abierto. Reescritura como código fresco — sin portar el legado de `vector_tools.py` (su eliminación se aceptó as-is en el merge Epic 4 → main). DoD: tras aterrizar, `tools/list` = `coreai_dispatch_task` + `coreai_get_task` + `coreai_search_context`.
+### [ADR-005-002] Endurecimiento del Recall: `coreai_search_context` y `coreai_search_image` read-only — #37 — ✅ Cerrado (26 oct 2026)
+Reescritura como código fresco — sin portar el legado de `vector_tools.py` (su eliminación se aceptó as-is en el merge Epic 4 → main). Decisiones de cierre (26 oct): **sweep** por el catálogo `DomainType` con merge global por score y `top_k` tras el merge (el ranking es de la consulta, no de la colección); `coreai_search_image` entra en el mismo bloque con **superficie simétrica** (`project`, `top_k` y umbral planos en ambas tools); la resolución de identidad multi-tenant queda **diferida** a su propia pieza de diseño — el recall v1 no filtra por tenant y los puntos conservan `tenant_id` en su payload, así que restaurar el aislamiento no exige migración; el recall vive en `HybridMemoryManager` (la tool es capa fina); embed efímero de consulta sin auditoría (dif-cero en `llm_audit`); colección inexistente → error explícito (`MissingCollectionError`) que suena en la tool call — el BUG-001 (#34) se trata en su propio issue, no se arregla aquí. Hallazgo colateral corregido: el contrato `vectorize_event` valida `project` pero el handler lo tiraba — ahora se propaga al payload de Qdrant (única fuga contrato→DB). DoD cumplido y defendido por test: `tools/list` = `coreai_dispatch_task` + `coreai_get_task` + `coreai_search_context` + `coreai_search_image`, exactamente esas cuatro.
 
 ### [ADR-005-003] Documentación de Contratos y Ventana de Deprecación — #39
 Cerrado por absorción: las descripciones de tools ya declaran el contrato write-then-read (dispatch desde ADR-006-003, `coreai_get_task` desde BUG-003 #53); la publicación machine-readable queda absorbida por [ADR-006-002] #42; la ventana de deprecación se descartó como obsoleta — `coreai_store_context` muere con la eliminación aceptada de `vector_tools.py`, sin nada que migrar.

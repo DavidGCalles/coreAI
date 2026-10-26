@@ -8,9 +8,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.schemas.memory import DomainType, MemorySearchFilters, Visibility
-from src.schemas.llm import EmbeddingRequest, CompletionRequest
+from src.schemas.llm import (
+    CompletionRequest,
+    EmbeddingRequest,
+    IMAGE_EMBEDDING_MODEL,
+    TEXT_EMBEDDING_MODEL,
+)
+from src.schemas.recall import MemoryHit
 from src.repositories.relational import EventRepository, LLMAuditRepository
-from src.repositories.vector import VectorRepository
+from src.repositories.vector import IMAGE_COLLECTION, VectorRepository
 from src.managers.llm_client import LLMClient
 from src.db.models import Event
 
@@ -25,6 +31,17 @@ CONSOLIDATION_CHAT_MODEL = "local-fallback"
 # Ventanas del contrato consolidate_memory: '<entero><h|d|w>' (p. ej. '7d').
 _VENTANA_RE = re.compile(r"^(\d+)([hdw])$")
 _UNIDADES_VENTANA = {"h": "hours", "d": "days", "w": "weeks"}
+
+
+class MissingCollectionError(RuntimeError):
+    """
+    Colección de Qdrant ausente para un recall (ADR-005-002, #37).
+
+    El recall se niega antes que mentir: una colección que no existe no es
+    un no-match honesto — es un fallo de inicialización del sustrato, y el
+    cliente tiene que oírlo como error explícito (decisión de David, 26
+    oct: los errores suenan, no se esconden detrás de listas vacías).
+    """
 
 
 def parsear_ventana_temporal(time_window: str) -> timedelta:
@@ -79,8 +96,9 @@ class HybridMemoryManager:
         Llama al proxy, obtiene el vector y registra la factura en Postgres.
         Todo queda atado a la transacción activa.
         """
-        # 1. Petición validada por Pydantic
-        request_data = EmbeddingRequest(model="text-embedding", input=text)
+        # 1. Petición validada por Pydantic (id de grupo: única fuente de
+        #    verdad en schemas/llm.py — lección de la PR #63)
+        request_data = EmbeddingRequest(model=TEXT_EMBEDDING_MODEL, input=text)
         response = await self.llm_client.generate_embedding(request_data)
         
         # 2. Telemetría: Registro del coste usando el repositorio relacional
@@ -100,7 +118,8 @@ class HybridMemoryManager:
         domain: DomainType,
         content: str,
         visibility: Visibility,
-        metadata: dict[str, Any]
+        metadata: dict[str, Any],
+        project: str | None = None
     ) -> Event:
         """
         Inyección dual SIN commit: evento relacional (flush), embedding
@@ -119,11 +138,14 @@ class HybridMemoryManager:
         # 2. IA: Generación de Vector y Registro de Auditoría
         vector = await self._get_embedding(content, entity_id)
 
-        # 3. Inserción Vectorial (Qdrant)
+        # 3. Inserción Vectorial (Qdrant). 'project' viaja como clave plana
+        #    del payload (FR-3, #51), simétrica con los puntos de imagen: el
+        #    filtro del recall la comparte en texto e imagen.
         payload = {
             "tenant_id": str(entity_id),
             "content": content,
-            "metadata": metadata
+            "metadata": metadata,
+            "project": project
         }
 
         await self.vector_repo.upsert(
@@ -140,7 +162,8 @@ class HybridMemoryManager:
         domain: DomainType, 
         content: str, 
         visibility: Visibility = Visibility.PRIVATE,
-        metadata: dict[str, Any] = None
+        metadata: dict[str, Any] = None,
+        project: str | None = None
     ) -> uuid.UUID:
         metadata = metadata or {}
         
@@ -150,7 +173,8 @@ class HybridMemoryManager:
                 domain=domain,
                 content=content,
                 visibility=visibility,
-                metadata=metadata
+                metadata=metadata,
+                project=project
             )
             
             # 4. Consistencia: Asentamos la transacción y la auditoría
@@ -330,3 +354,162 @@ class HybridMemoryManager:
         
         # Falta lógica de ordenación, pero eso no bloquea el Epic
         return hydrated_events
+
+    # =================================================================
+    # RECALL SÍNCRONO READ-ONLY (ADR-005-002, #37)
+    # =================================================================
+    # Apertura síncrona ACOTADA del sustrato (enmienda ADR-005, 26 oct):
+    # el recall es request-response y vive AQUÍ, en el manager — la tool
+    # MCP es capa fina. Cero escrituras: ni dispatch, ni factura en
+    # llm_audit, ni commit; la consulta (texto o imagen) es cómputo
+    # efímero que nunca se persiste.
+
+    # La resolución de identidad multi-tenant queda DIFERIDA a su propia
+    # pieza de diseño: el recall v1 no filtra por tenant. Los puntos
+    # conservan tenant_id en su payload (la ingesta lo escribe), así
+    # que restaurar el aislamiento es un cambio local en el filtro.
+
+    async def _embed_query_texto(self, query: str) -> list[float]:
+        """
+        Embed EFÍMERO de la consulta de texto.
+
+        Mismo gateway que la ingesta, telemetría distinta: la consulta es
+        cómputo read-only, no un dato del inquilino — no toca llm_audit
+        (el _get_embedding de la ingesta sí factura, atado a su transacción).
+        """
+        request = EmbeddingRequest(model=TEXT_EMBEDDING_MODEL, input=query)
+        response = await self.llm_client.generate_embedding(request)
+        if not response.data:
+            raise ValueError(
+                "El gateway devolvió un embedding vacío para la consulta — "
+                "sin vector no hay recall."
+            )
+        return response.data[0].embedding
+
+    async def _embed_query_imagen(self, image_data_uri: str) -> list[float]:
+        """
+        Embed EFÍMERO de la imagen de consulta (identify, ADR-007-002).
+
+        Grupo 'image-embedding' (jina-clip-v2) con modality='image'. La
+        imagen de consulta es cómputo, no memoria: nunca se persiste, no
+        se factura — a diferencia de la ingesta de imagen, que va por el
+        async lane con auditoría completa.
+        """
+        request = EmbeddingRequest(
+            model=IMAGE_EMBEDDING_MODEL,
+            input=image_data_uri,
+            modality="image",
+        )
+        response = await self.llm_client.generate_embedding(request)
+        if not response.data:
+            raise ValueError(
+                "El gateway devolvió un embedding vacío para la imagen de "
+                "consulta — sin vector no hay recall visual."
+            )
+        return response.data[0].embedding
+
+    @staticmethod
+    def _hit_desde_punto(point: Any, domain: str) -> MemoryHit:
+        """
+        Traduce un ScoredPoint crudo de Qdrant a un hit plano del contrato.
+
+        Claves planas del payload, sin jerarquías: lo que ve el cliente es
+        lo que hay en el punto (higiene de superficies, decisión 26 oct).
+        """
+        payload = point.payload or {}
+        return MemoryHit(
+            point_id=str(point.id),
+            domain=domain,
+            score=point.score,
+            content=payload.get("content"),
+            session_id=payload.get("session_id"),
+            project=payload.get("project"),
+        )
+
+    async def recall_text(
+        self,
+        query: str,
+        project: str | None = None,
+        top_k: int = 5,
+        score_threshold: float = 0.7
+    ) -> list[MemoryHit]:
+        """
+        Recall de texto: sweep por el catálogo DomainType + merge global.
+
+        Recorre TODAS las colecciones de texto con los mismos filtros,
+        fusiona los resultados en un solo ranking por score y recorta a
+        top_k DESPUÉS del merge (decisión 26 oct): el ranking pertenece a la
+        consulta, no a la colección. Cada hit lleva su colección de origen.
+
+        Colección inexistente = MissingCollectionError ANTES de embeber:
+        un fallo de inicialización no se disfraza de no-match honesto.
+        """
+        existentes = await self.vector_repo.collection_names()
+        faltantes = [d.value for d in DomainType if d.value not in existentes]
+        if faltantes:
+            raise MissingCollectionError(
+                f"Recall bloqueado: colecciones inexistentes en el vector "
+                f"store ({', '.join(faltantes)}). El sustrato no está "
+                f"inicializado — esto es un fallo de arranque, no un no-match "
+                f"de la búsqueda."
+            )
+
+        query_vector = await self._embed_query_texto(query)
+
+        hits: list[MemoryHit] = []
+        for domain in DomainType:
+            filters = MemorySearchFilters(
+                project=project,
+                limit=top_k,
+                score_threshold=score_threshold
+            )
+            puntos = await self.vector_repo.search(
+                domain=domain,
+                query_vector=query_vector,
+                filters=filters
+            )
+            hits.extend(
+                self._hit_desde_punto(punto, domain.value) for punto in puntos
+            )
+
+        # Merge global por score, top_k tras el merge
+        hits.sort(key=lambda hit: hit.score, reverse=True)
+        return hits[:top_k]
+
+    async def recall_image(
+        self,
+        image_data_uri: str,
+        project: str | None = None,
+        top_k: int = 5,
+        score_threshold: float = 0.5
+    ) -> list[MemoryHit]:
+        """
+        Recall visual (identify): similitud contra la colección de imágenes.
+
+        Simétrico con el recall de texto (misma firma de filtros, mismo
+        hit plano) sobre el espacio de visión (jina-clip-v2, 1024 dims).
+        La imagen de consulta NO se persiste: embed efímero. Sin matches
+        sobre el umbral = no-match honesto (lista vacía).
+        """
+        existentes = await self.vector_repo.collection_names()
+        if IMAGE_COLLECTION not in existentes:
+            raise MissingCollectionError(
+                f"Recall visual bloqueado: la colección '{IMAGE_COLLECTION}' "
+                f"no existe en el vector store. El sustrato de visión no "
+                f"está inicializado — fallo de arranque, no un no-match de la "
+                f"búsqueda."
+            )
+
+        query_vector = await self._embed_query_imagen(image_data_uri)
+
+        filters = MemorySearchFilters(
+            project=project,
+            limit=top_k,
+            score_threshold=score_threshold
+        )
+        puntos = await self.vector_repo.search(
+            domain=IMAGE_COLLECTION,
+            query_vector=query_vector,
+            filters=filters
+        )
+        return [self._hit_desde_punto(punto, IMAGE_COLLECTION) for punto in puntos]

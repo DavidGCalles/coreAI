@@ -43,6 +43,7 @@ Lo que este ADR **no** decide: campo `modality` en el schema de memoria, passthr
 - **La colección es garantía de arranque, no creación manual:** un despliegue limpio auto-genera `images` (1024 dims, coseno) — `ensure_collection` idempotente en el worker, antes de consumir la cola (PR #64).
 - **Evento auto-anclado (decisión 22 oct):** la correlación texto↔imagen la da la sesión (`session_id` en el payload del punto), no una referencia encadenada a otra tarea (`text_event_id` eliminado). El `project` (FR-3 #51) viaja en el propio evento; la imagen en sí no se persiste: el vector es dato derivado.
 - **E2E validado (22–23 oct):** stub de 99 bytes rebota SÍNCRONO en el dispatch con diagnóstico de bytes; imagen real (173 KB) → punto de 1024 dims en `images` con factura en `llm_audit`.
+- **Recall visual síncrono (26 oct, [ADR-005-002] #37):** los reads interactivos embeben la imagen (o el texto) de consulta EFÍMERAMENTE — mismo gateway (entrada `image-embedding`, `modality=image`), sin auditoría en `llm_audit` y sin persistir la consulta: cómputo, no memoria. El resultado es una lista de hits planos (sesión, proyecto, score) o un no-match honesto bajo umbral; una colección `images` inexistente es error explícito (`MissingCollectionError`), no un vacío. La INGESTA de imagen sigue SIEMPRE por el async lane (`vectorize_image_event`): la asimetría es solo de lectura — escribir nunca fue síncrono.
 
 ## Related
 *   ADR-005 (#36) — Doctrina de Ingesta Unificada.

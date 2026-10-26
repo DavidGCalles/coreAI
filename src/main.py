@@ -11,6 +11,7 @@ from mcp.server.context import ServerRequestContext
 from src.managers.config_manager import config_manager
 from src.logging_config import configure_logging
 from src.mcp.tools.task_tools import get_task_tools, handle_task_tool
+from src.mcp.tools.recall_tools import get_recall_tools, handle_recall_tool
 from src.mcp.resources.contract_resources import get_contract_resources, read_contract_resource
 
 from pydantic import BaseModel, ConfigDict
@@ -38,8 +39,11 @@ class PassthroughRequest(BaseModel):
 # El router real delega en el registro dinámico: se enruta por nombre
 # registrado, no por prefijo hardcodeado — así el router queda estable
 # cuando la lista de herramientas crece (BUG-003, #53: coreai_get_task
-# no comparte prefijo con coreai_dispatch_task).
-_REGISTERED_TOOL_NAMES = frozenset(tool.name for tool in get_task_tools())
+# no comparte prefijo con coreai_dispatch_task). Dos familias, dos
+# manejadores: tasks (async lane) y recall (síncrono read-only, #37).
+_TASK_TOOL_NAMES = frozenset(tool.name for tool in get_task_tools())
+_RECALL_TOOL_NAMES = frozenset(tool.name for tool in get_recall_tools())
+_REGISTERED_TOOL_NAMES = _TASK_TOOL_NAMES | _RECALL_TOOL_NAMES
 
 async def handle_list_tools(
     ctx: ServerRequestContext, 
@@ -47,7 +51,7 @@ async def handle_list_tools(
 ) -> types.ListToolsResult:
     """Devuelve las herramientas delegando en el registro dinámico."""
     return types.ListToolsResult(
-        tools=get_task_tools(),
+        tools=get_task_tools() + get_recall_tools(),
         nextCursor=None
     )
 
@@ -63,7 +67,11 @@ async def handle_call_tool(
     
     try:
         if name and name in _REGISTERED_TOOL_NAMES:
-            raw_response = await handle_task_tool(name, arguments)
+            # Dos familias de tools, dos manejadores: mismo formato de
+            # respuesta, distinta política (dispatch async vs. recall
+            # read-only síncrono).
+            handler = handle_task_tool if name in _TASK_TOOL_NAMES else handle_recall_tool
+            raw_response = await handler(name, arguments)
             text_output = raw_response["content"][0]["text"]
             is_error = raw_response.get("isError", False)
             

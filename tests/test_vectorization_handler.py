@@ -7,6 +7,8 @@ Valida:
 - Extracción estricta por contrato: solo 'content' (ADR-006 — purga de la extracción tolerante).
 - Inyección de dependencias limpia (Qdrant global).
 - Delegación exitosa a HybridMemoryManager.add_memory() mediante kwargs.
+- Propagación de 'project' (FR-3, #51): del payload del contrato al payload
+  de Qdrant vía add_memory — y su default honesto (None) cuando falta.
 """
 
 import pytest
@@ -26,6 +28,23 @@ from src.workers.task_router import handle_vectorize_event
 @pytest.fixture
 def pending_vectorize_task():
     """Crea una tarea PENDING con payload normalizado por la frontera (clave 'content')."""
+    return Task(
+        id=uuid.UUID('f47ac10b-58cc-4372-a567-0e02b2c3d479'),
+        session_id=uuid.UUID('11111111-1111-1111-1111-111111111111'),
+        status=TaskStatus.PENDING,
+        payload={
+            "task_type": TaskType.VECTORIZE_EVENT.value,
+            "content": "Memoria determinista y resiliente.",
+            "domain": "SYSTEM",
+            "visibility": "PRIVATE",
+            "project": "elios-workshop"
+        }
+    )
+
+
+@pytest.fixture
+def pending_vectorize_task_sin_project():
+    """Crea una tarea PENDING sin 'project': clave opcional del contrato."""
     return Task(
         id=uuid.UUID('f47ac10b-58cc-4372-a567-0e02b2c3d479'),
         session_id=uuid.UUID('11111111-1111-1111-1111-111111111111'),
@@ -97,7 +116,47 @@ async def test_handle_vectorize_event_happy_path(
         entity_id=uuid.UUID('99999999-9999-9999-9999-999999999999'),
         domain=DomainType.SYSTEM,
         content="Memoria determinista y resiliente.",
-        visibility=Visibility.PRIVATE
+        visibility=Visibility.PRIVATE,
+        project="elios-workshop"
+    )
+
+
+@pytest.mark.asyncio
+@patch("src.workers.task_router.get_qdrant_client", new_callable=AsyncMock)
+@patch("src.workers.task_router.LLMClient")
+@patch("src.workers.task_router.HybridMemoryManager")
+async def test_handle_vectorize_event_project_default_none(
+    mock_manager_class,
+    mock_llm_client_class,
+    mock_get_qdrant,
+    pending_vectorize_task_sin_project
+):
+    """
+    Test de propagación de 'project' (FR-3, #51): el contrato lo declara
+    OPCIONAL — un payload sin 'project' NO es corrupción de cola. El
+    handler debe pasarlo como None explícito, no inventarlo: los puntos
+    de texto sin proyecto son simplemente no-filtrables por él.
+    """
+    session_mock = AsyncMock()
+
+    mock_db_session = MagicMock()
+    mock_db_session.entity_id = uuid.UUID('99999999-9999-9999-9999-999999999999')
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_db_session
+    session_mock.execute.return_value = mock_result
+
+    mock_manager_instance = AsyncMock()
+    mock_manager_class.return_value = mock_manager_instance
+
+    await handle_vectorize_event(pending_vectorize_task_sin_project, session_mock)
+
+    mock_manager_instance.add_memory.assert_awaited_once_with(
+        entity_id=uuid.UUID('99999999-9999-9999-9999-999999999999'),
+        domain=DomainType.SYSTEM,
+        content="Memoria determinista y resiliente.",
+        visibility=Visibility.PRIVATE,
+        project=None
     )
 
 
