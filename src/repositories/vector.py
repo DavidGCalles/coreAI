@@ -17,6 +17,18 @@ IMAGE_COLLECTION = "images"
 IMAGE_VECTOR_SIZE = 1024
 IMAGE_VECTOR_DISTANCE = models.Distance.COSINE
 
+# =====================================================================
+# COLECCIONES DE TEXTO POR DOMINIO (BUG-001 #34)
+# =====================================================================
+# Las colecciones de texto (document, conversation, system) derivan del
+# catálogo DomainType y comparten el embedding de texto del gateway:
+# multilingual-e5-small, 384 dims, coseno. Hasta el BUG-001 solo la
+# colección 'images' estaba garantizada al arranque (PR #64): un
+# despliegue limpio dejaba las de texto inexistentes y la ingesta moría
+# asíncrona, tarea a tarea, contra el upsert.
+TEXT_VECTOR_SIZE = 384
+TEXT_VECTOR_DISTANCE = models.Distance.COSINE
+
 
 class VectorRepository:
     """
@@ -33,29 +45,56 @@ class VectorRepository:
         distance: models.Distance,
     ) -> None:
         """
-        Garantía idempotente: crea la colección si no existe, no la toca si ya existe.
+        Garantía idempotente CON validación de topología preexistente
+        (BUG-001 #34).
 
-        Idempotencia por comparación de nombres (get_collections), no por
-        try/except: el arranque número uno y el reinicio número cien hacen
-        exactamente lo mismo. El worker la invoca al arrancar (ADR-007-002
-        #50) — un despliegue limpio ya no depende de que nadie cree la
-        colección a mano.
+        Crea la colección si no existe y, si existe, comprueba que su
+        configuración vectorial casa con la esperada: mismas
+        dimensiones, misma distancia, vector único sin nombre. La
+        idempotencia es por comparación de nombres (get_collections),
+        no por try/except: el arranque número uno y el reinicio número
+        cien hacen exactamente lo mismo.
+
+        La validación de lo preexistente es la mitad que faltaba del
+        BUG-001: una colección creada a mano con dims de otro modelo
+        tragaría los upserts en silencio asíncrono, tarea a tarea.
+        Ante desajuste NO se recrea nada (dentro puede haber datos del
+        inquilino): el error suena al arranque y la revisión es manual.
         """
         existentes = {c.name for c in (await self.client.get_collections()).collections}
-        if collection_name in existentes:
-            logger.debug("Colección '%s' ya existe — nada que hacer", collection_name)
+        if collection_name not in existentes:
+            await self.client.create_collection(
+                collection_name=collection_name,
+                vectors_config=models.VectorParams(
+                    size=vector_size,
+                    distance=distance,
+                ),
+            )
+            logger.info(
+                "Colección '%s' creada (%d dims, %s)",
+                collection_name, vector_size, distance,
+            )
             return
 
-        await self.client.create_collection(
-            collection_name=collection_name,
-            vectors_config=models.VectorParams(
-                size=vector_size,
-                distance=distance,
-            ),
-        )
-        logger.info(
-            "Colección '%s' creada (%d dims, %s)",
-            collection_name, vector_size, distance,
+        # Existe: validar la topología ANTES de aceptar tráfico (BUG-001 #34)
+        info = await self.client.get_collection(collection_name=collection_name)
+        vectors = info.config.params.vectors
+        if isinstance(vectors, dict) or vectors is None or vectors.size != vector_size or vectors.distance != distance:
+            encontrada = (
+                "named vectors" if isinstance(vectors, dict)
+                else "sin vectors" if vectors is None
+                else f"{vectors.size} dims, {vectors.distance}"
+            )
+            raise ValueError(
+                f"La colección '{collection_name}' existe con topología "
+                f"({encontrada}) que no casa con la esperada "
+                f"({vector_size} dims, {distance}, vector único sin nombre) — "
+                f"¿dims heredadas de otro modelo de embedding? El worker NO "
+                f"recrea colecciones con datos dentro: revisar manualmente."
+            )
+        logger.debug(
+            "Colección '%s' ya existe con la topología esperada — nada que hacer",
+            collection_name,
         )
 
     def _build_filter(self, filters: MemorySearchFilters) -> models.Filter:
