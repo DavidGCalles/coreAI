@@ -14,7 +14,7 @@ from sqlalchemy import select
 from src.db.models import Task, Session
 from src.db.vector_db import get_qdrant_client
 from src.schemas.tasks import TaskType
-from src.schemas.llm import EmbeddingRequest
+from src.schemas.llm import EmbeddingRequest, IMAGE_EMBEDDING_MODEL
 from src.contracts import task_contract_registry
 from src.managers.memory_manager import HybridMemoryManager
 from src.db.models import DomainType, Visibility
@@ -27,11 +27,10 @@ from src.managers.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 
-# Entrada del gateway LiteLLM para embeddings de imagen (BUG-004 #58): provider
-# infinity → jina-clip-v2. El handler NUNCA habla con Infinity directo: la
-# latencia (~4,3 s/imagen en CPU) y los tokens quedan en Prometheus sin
-# instrumentar nada nuevo.
-IMAGE_EMBEDDING_MODEL = "image-embedding"
+# Entrada del gateway LiteLLM para embeddings de imagen (BUG-004 #58):
+# provider infinity → jina-clip-v2. El id de grupo vive en schemas/llm.py
+# (única fuente de verdad, lección de la PR #63) y se reexporta desde aquí
+# para no romper a los imports existentes del worker.
 
 # =====================================================================
 # MANEJADORES INDIVIDUALES (Funciones asincronas independientes)
@@ -134,6 +133,13 @@ async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
     domain_str = payload.get("domain", "SYSTEM")
     visibility_str = payload.get("visibility", "PRIVATE")
 
+    # Proyecto (FR-3, #51): clave plana y OPCIONAL del contrato. Hallazgo
+    # 26 oct: el contrato vectorize_event SÍ valida 'project', pero este
+    # handler lo tiraba — nunca llegaba al payload de Qdrant (única fuga
+    # contrato→DB). El recall la filtra; sin ella, los puntos de texto
+    # nacen huérfanos de proyecto.
+    project = payload.get("project")
+
     # =================================================================
     # FASE 3: Inyección de Dependencias
     # =================================================================
@@ -160,7 +166,8 @@ async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
             entity_id=entity_id,
             domain=DomainType(domain_str.lower()),
             content=content,
-            visibility=Visibility(visibility_str.lower())
+            visibility=Visibility(visibility_str.lower()),
+            project=project
         )
 
         logger.info("  [Worker] Vectorización completada con éxito para task %s", task.id)
@@ -503,3 +510,4 @@ async def route_task(task: Task, session: AsyncSession) -> None:
 
     # Ejecutar el manejador pasandole la tarea y la sesion asincrona
     await handler(task, session)
+
