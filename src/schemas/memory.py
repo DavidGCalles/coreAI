@@ -37,7 +37,7 @@ class CoreMemoryNode(BaseModel):
 
 class MemorySearchFilters(BaseModel):
     """Parámetros de entrada para consultas al motor vectorial."""
-    tenant_id: str = Field(..., description="ID del propietario para aislamiento de datos.")
+    tenant_id: str | None = Field(None, description="Aislamiento por propietario. None = sin filtro de tenant: la resolución de identidad multi-tenant está diferida a su propia pieza de diseño.")
     query: str = Field("", description="Texto de consulta — lo embebe el llamador; el repositorio solo filtra.")
     domain: DomainType | None = Field(None, description="Filtrar por un dominio específico.")
     project: str | None = Field(None, description="Filtro exacto por proyecto (FR-3): clave plana 'project' del payload, simétrica en texto e imagen.")

@@ -72,13 +72,17 @@ class VectorRepository:
         """Traduce los filtros semánticos de Pydantic al dialecto duro de Qdrant."""
         must_conditions = []
         
-        # Multitenencia obligatoria
-        must_conditions.append(
-            models.FieldCondition(
-                key="tenant_id", 
-                match=models.MatchValue(value=filters.tenant_id)
+        # Tenancy: filtro solo con identidad resuelta. El recall v1 no
+        # filtra por tenant (resolución de identidad diferida a pieza
+        # propia); la ingesta sigue escribiendo tenant_id en el payload
+        # de los puntos — restaurar el aislamiento es este condicional.
+        if filters.tenant_id is not None:
+            must_conditions.append(
+                models.FieldCondition(
+                    key="tenant_id",
+                    match=models.MatchValue(value=filters.tenant_id)
+                )
             )
-        )
 
         # Proyecto (FR-3, #51): clave plana del payload, simétrica en los
         # puntos de texto y de imagen — el filtro del recall la comparte.

@@ -364,6 +364,11 @@ class HybridMemoryManager:
     # llm_audit, ni commit; la consulta (texto o imagen) es cómputo
     # efímero que nunca se persiste.
 
+    # La resolución de identidad multi-tenant queda DIFERIDA a su propia
+    # pieza de diseño: el recall v1 no filtra por tenant. Los puntos
+    # conservan tenant_id en su payload (la ingesta lo escribe), así
+    # que restaurar el aislamiento es un cambio local en el filtro.
+
     async def _embed_query_texto(self, query: str) -> list[float]:
         """
         Embed EFÍMERO de la consulta de texto.
@@ -424,7 +429,6 @@ class HybridMemoryManager:
     async def recall_text(
         self,
         query: str,
-        tenant_id: str,
         project: str | None = None,
         top_k: int = 5,
         score_threshold: float = 0.7
@@ -434,8 +438,8 @@ class HybridMemoryManager:
 
         Recorre TODAS las colecciones de texto con los mismos filtros,
         fusiona los resultados en un solo ranking por score y recorta a
-        top_k DESPUÉS del merge (decisión 26 oct): el ranking pertenece al
-        inquilino, no a la colección. Cada hit lleva su colección de origen.
+        top_k DESPUÉS del merge (decisión 26 oct): el ranking pertenece a la
+        consulta, no a la colección. Cada hit lleva su colección de origen.
 
         Colección inexistente = MissingCollectionError ANTES de embeber:
         un fallo de inicialización no se disfraza de no-match honesto.
@@ -446,8 +450,8 @@ class HybridMemoryManager:
             raise MissingCollectionError(
                 f"Recall bloqueado: colecciones inexistentes en el vector "
                 f"store ({', '.join(faltantes)}). El sustrato no está "
-                f"inicializado — esto es un fallo de arranque, no un "
-                f"no-match del inquilino '{tenant_id}'."
+                f"inicializado — esto es un fallo de arranque, no un no-match "
+                f"de la búsqueda."
             )
 
         query_vector = await self._embed_query_texto(query)
@@ -455,7 +459,6 @@ class HybridMemoryManager:
         hits: list[MemoryHit] = []
         for domain in DomainType:
             filters = MemorySearchFilters(
-                tenant_id=tenant_id,
                 project=project,
                 limit=top_k,
                 score_threshold=score_threshold
@@ -476,7 +479,6 @@ class HybridMemoryManager:
     async def recall_image(
         self,
         image_data_uri: str,
-        tenant_id: str,
         project: str | None = None,
         top_k: int = 5,
         score_threshold: float = 0.5
@@ -494,14 +496,13 @@ class HybridMemoryManager:
             raise MissingCollectionError(
                 f"Recall visual bloqueado: la colección '{IMAGE_COLLECTION}' "
                 f"no existe en el vector store. El sustrato de visión no "
-                f"está inicializado — fallo de arranque, no un no-match del "
-                f"inquilino '{tenant_id}'."
+                f"está inicializado — fallo de arranque, no un no-match de la "
+                f"búsqueda."
             )
 
         query_vector = await self._embed_query_imagen(image_data_uri)
 
         filters = MemorySearchFilters(
-            tenant_id=tenant_id,
             project=project,
             limit=top_k,
             score_threshold=score_threshold

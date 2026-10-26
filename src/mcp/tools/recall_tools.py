@@ -27,7 +27,7 @@ from src.schemas.recall import RecallImageRequest, RecallResponse, RecallTextReq
 logger = logging.getLogger(__name__)
 
 SEARCH_CONTEXT_DESCRIPTION = (
-    "Búsqueda semántica read-only sobre la memoria de texto del inquilino: "
+    "Búsqueda semántica read-only sobre la memoria de texto: "
     "recorre todas las colecciones de texto, ordena por similitud y devuelve "
     "los top_k resultados con su score y su colección de origen. Sin "
     "resultados sobre el umbral = no-match honesto (lista vacía). Cero "
@@ -97,7 +97,6 @@ async def handle_recall_tool(name: str, arguments: dict) -> dict:
             if name == "coreai_search_context":
                 hits = await manager.recall_text(
                     query=request.query,
-                    tenant_id=request.tenant_id,
                     project=request.project,
                     top_k=request.top_k,
                     score_threshold=request.score_threshold,
@@ -105,7 +104,6 @@ async def handle_recall_tool(name: str, arguments: dict) -> dict:
             else:
                 hits = await manager.recall_image(
                     image_data_uri=request.image,
-                    tenant_id=request.tenant_id,
                     project=request.project,
                     top_k=request.top_k,
                     score_threshold=request.score_threshold,

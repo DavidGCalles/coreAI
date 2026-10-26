@@ -7,12 +7,13 @@ recall_image, con gateway y Qdrant mockeados) y la capa fina MCP
 
 Decisiones que estos tests defienden (26 oct):
 - Sweep por el catálogo DomainType + merge global por score + top_k tras
-  el merge: el ranking es del inquilino, no de la colección.
+  el merge: el ranking es de la consulta, no de la colección.
 - Colección inexistente = MissingCollectionError EXPLÍCITO y ANTES de
   embeber: un fallo de inicialización no se disfraza de no-match honesto.
 - Dif-cero: el recall no escribe NADA — ni factura en llm_audit, ni
   commit, ni upsert. La consulta (texto o imagen) es embed efímero.
-- Tenancy simétrica: tenant_id y project viajan igual en texto e imagen.
+- Simetría de superficie: project, top_k y umbral viajan igual en texto e
+  imagen; sin filtro de tenant (identidad multi-tenant diferida).
 - La tool valida la forma en el borde, ANTES de abrir sesión.
 - DoD: tools/list son EXACTAMENTE las dos de tasks + las dos de recall.
 """
@@ -44,7 +45,6 @@ VALID_IMAGE_DATA_URI = (
     "AAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCdABmX/9k="
 )
 
-TENANT_ID = "99999999-9999-9999-9999-999999999999"
 DOC_POINT_ID = "11111111-1111-1111-1111-111111111111"
 CONV_POINT_ID = "22222222-2222-2222-2222-222222222222"
 SYS_POINT_ID = "33333333-3333-3333-3333-333333333333"
@@ -133,7 +133,6 @@ async def test_recall_text_sweep_merge_y_top_k():
 
     hits = await manager.recall_text(
         query="¿qué piezas se registraron?",
-        tenant_id=TENANT_ID,
         project="elios-workshop",
         top_k=2,
         score_threshold=0.7,
@@ -144,10 +143,10 @@ async def test_recall_text_sweep_merge_y_top_k():
     dominios = [call.kwargs["domain"] for call in vector_repo.search.call_args_list]
     assert dominios == [DomainType.DOCUMENT, DomainType.CONVERSATION, DomainType.SYSTEM]
 
-    # 2. Filtros planos: tenancy obligatoria + project opcional + el top_k
-    #    como limit de cada búsqueda parcial
+    # 2. Filtros planos: project opcional + el top_k como limit de cada
+    #    búsqueda parcial
     filters = vector_repo.search.call_args_list[0].kwargs["filters"]
-    assert filters.tenant_id == TENANT_ID
+    assert filters.tenant_id is None  # diferimiento defendido: sin filtro de tenant
     assert filters.project == "elios-workshop"
     assert filters.limit == 2
     assert filters.score_threshold == 0.7
@@ -173,13 +172,13 @@ async def test_recall_text_sweep_merge_y_top_k():
 
 @pytest.mark.asyncio
 async def test_recall_text_no_match_honesto():
-    """Tres colecciones vacías para este inquilino/umbral = lista vacía, sin drama."""
+    """Tres colecciones vacías a este umbral = lista vacía, sin drama."""
     vector_repo = AsyncMock()
     vector_repo.collection_names.return_value = {"document", "conversation", "system"}
     vector_repo.search.return_value = []
     manager, session, audit_repo, llm = _manager(vector_repo, _embedding_response())
 
-    hits = await manager.recall_text(query="nada que ver", tenant_id=TENANT_ID)
+    hits = await manager.recall_text(query="nada que ver")
 
     assert hits == []
     assert vector_repo.search.await_count == 3
@@ -198,7 +197,7 @@ async def test_recall_text_coleccion_inexistente_suena_antes_de_embeber():
     manager, session, audit_repo, llm = _manager(vector_repo, _embedding_response())
 
     with pytest.raises(MissingCollectionError) as exc_info:
-        await manager.recall_text(query="memorias", tenant_id=TENANT_ID)
+        await manager.recall_text(query="memorias")
 
     assert "system" in str(exc_info.value)
     # El gateway ni se toca: la denegación es ANTES de pagar el embed
@@ -207,7 +206,7 @@ async def test_recall_text_coleccion_inexistente_suena_antes_de_embeber():
 
 
 # =====================================================================
-# CAPA DE POLÍTICA: recall_image (identify, tenancy simétrica)
+# CAPA DE POLÍTICA: recall_image (identify, superficie simétrica)
 # =====================================================================
 
 @pytest.mark.asyncio
@@ -226,7 +225,6 @@ async def test_recall_image_happy_path():
 
     hits = await manager.recall_image(
         image_data_uri=VALID_IMAGE_DATA_URI,
-        tenant_id=TENANT_ID,
         project="elios-workshop",
         top_k=5,
         score_threshold=0.5,
@@ -251,7 +249,7 @@ async def test_recall_image_happy_path():
     # Búsqueda contra la colección de imágenes, filtros idénticos a los de texto
     call = vector_repo.search.call_args
     assert call.kwargs["domain"] == IMAGE_COLLECTION
-    assert call.kwargs["filters"].tenant_id == TENANT_ID
+    assert call.kwargs["filters"].tenant_id is None
     assert call.kwargs["filters"].project == "elios-workshop"
     assert call.kwargs["filters"].score_threshold == 0.5
 
@@ -267,7 +265,7 @@ async def test_recall_image_no_match_honesto():
     manager, session, audit_repo, llm = _manager(vector_repo, _embedding_response())
 
     hits = await manager.recall_image(
-        image_data_uri=VALID_IMAGE_DATA_URI, tenant_id=TENANT_ID, score_threshold=0.5,
+        image_data_uri=VALID_IMAGE_DATA_URI, score_threshold=0.5,
     )
 
     assert hits == []
@@ -282,7 +280,7 @@ async def test_recall_image_coleccion_inexistente_suena():
     manager, session, audit_repo, llm = _manager(vector_repo, _embedding_response())
 
     with pytest.raises(MissingCollectionError) as exc_info:
-        await manager.recall_image(image_data_uri=VALID_IMAGE_DATA_URI, tenant_id=TENANT_ID)
+        await manager.recall_image(image_data_uri=VALID_IMAGE_DATA_URI)
 
     assert IMAGE_COLLECTION in str(exc_info.value)
     llm.generate_embedding.assert_not_awaited()
@@ -314,7 +312,6 @@ async def test_tool_search_context_happy_path(
 
     response = await handle_recall_tool("coreai_search_context", {
         "query": "memorias del taller",
-        "tenant_id": TENANT_ID,
         "top_k": 3,
     })
 
@@ -326,7 +323,6 @@ async def test_tool_search_context_happy_path(
     # Delegación pura: los defaults del schema viajan explícitos al manager
     manager.recall_text.assert_awaited_once_with(
         query="memorias del taller",
-        tenant_id=TENANT_ID,
         project=None,
         top_k=3,
         score_threshold=0.7,
@@ -354,13 +350,11 @@ async def test_tool_search_image_happy_path(
 
     response = await handle_recall_tool("coreai_search_image", {
         "image": VALID_IMAGE_DATA_URI,
-        "tenant_id": TENANT_ID,
     })
 
     assert response["isError"] is False
     manager.recall_image.assert_awaited_once_with(
         image_data_uri=VALID_IMAGE_DATA_URI,
-        tenant_id=TENANT_ID,
         project=None,
         top_k=5,
         score_threshold=0.5,
@@ -376,19 +370,19 @@ async def test_tool_args_malformados_no_abren_sesion(mock_session_local):
     """
     # top_k fuera de rango
     response = await handle_recall_tool("coreai_search_context", {
-        "query": "x", "tenant_id": TENANT_ID, "top_k": 0,
+        "query": "x", "top_k": 0,
     })
     assert response["isError"] is True
 
     # SVG: el patrón raster lo rebota (misma regla que la ingesta)
     response = await handle_recall_tool("coreai_search_image", {
-        "image": "data:image/svg+xml;base64,PHN2Zy8=", "tenant_id": TENANT_ID,
+        "image": "data:image/svg+xml;base64,PHN2Zy8=",
     })
     assert response["isError"] is True
 
     # Clave desconocida (extra=forbid: schemas planos y cerrados)
     response = await handle_recall_tool("coreai_search_context", {
-        "query": "x", "tenant_id": TENANT_ID, "clave_inventada": 1,
+        "query": "x", "clave_inventada": 1,
     })
     assert response["isError"] is True
 
@@ -401,7 +395,6 @@ async def test_tool_imagen_corrupta_no_abre_sesion(mock_session_local):
     """Bytes que decodifican base64 pero no son imagen: el oráculo Pillow manda."""
     response = await handle_recall_tool("coreai_search_image", {
         "image": "data:image/png;base64,aGVsbG8=",  # "hello" no es un PNG
-        "tenant_id": TENANT_ID,
     })
     assert response["isError"] is True
     mock_session_local.assert_not_called()
@@ -427,7 +420,7 @@ async def test_tool_missing_collection_error_es_iserror(
     mock_manager_class.return_value = manager
 
     response = await handle_recall_tool("coreai_search_context", {
-        "query": "x", "tenant_id": TENANT_ID,
+        "query": "x",
     })
 
     assert response["isError"] is True

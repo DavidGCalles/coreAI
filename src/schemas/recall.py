@@ -27,7 +27,6 @@ class RecallTextRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str = Field(..., min_length=1, description="Consulta en lenguaje natural.")
-    tenant_id: str = Field(..., min_length=1, description="ID del inquilino: aislamiento obligatorio de los datos.")
     project: str | None = Field(None, min_length=1, description="Solo puntos registrados bajo este proyecto. Opcional.")
     top_k: int = Field(5, ge=1, le=50, description="Máximo número de resultados tras el merge global.")
     score_threshold: float = Field(0.7, ge=0.0, le=1.0, description="Similitud mínima para devolver un resultado; por debajo: no-match honesto.")
@@ -46,7 +45,6 @@ class RecallImageRequest(BaseModel):
             "persiste: embed efímero, sin tasks, sesión limpia."
         ),
     )
-    tenant_id: str = Field(..., min_length=1, description="ID del inquilino: aislamiento obligatorio de los datos.")
     project: str | None = Field(None, min_length=1, description="Solo puntos registrados bajo este proyecto. Opcional.")
     top_k: int = Field(5, ge=1, le=50, description="Máximo número de resultados.")
     score_threshold: float = Field(
