@@ -10,7 +10,7 @@
 - **100 % Docker** — el stack completo se levanta con un `docker compose up -d`.
 - **Toda interacción externa es vía MCP** — sin REST, sin WebSockets, sin UI propia: los clientes consumen tools.
 - **Memoria unificada** — PostgreSQL (UUIDs, entidades/eventos/relaciones) es la fuente de verdad; Qdrant contiene vectores derivados: nunca texto sin respaldo relacional.
-- **Ingesta unificada (ADR-005)** — una única apertura de escritura, `coreai_dispatch_task`: las escrituras son eventos que el córtex procesa en asíncrono; la lectura síncrona acotada (`coreai_search_context`, en camino) es la única otra apertura.
+- **Ingesta unificada (ADR-005)** — una única apertura de escritura, `coreai_dispatch_task`: las escrituras son eventos que el córtex procesa en asíncrono; las lecturas síncronas acotadas (`coreai_search_context` + `coreai_search_image`, read-only) son la única otra apertura.
 - **Contratos de tarea (ADR-006)** — cada tipo de tarea despachable lleva contrato formal registrado: *sin contrato no hay despacho*.
 - **Memoria multimodal acotada (ADR-007)** — la ingesta de imagen va por la event lane como toda escritura (tarea `vectorize_image_event` con contrato ADR-006); sus vectores viven en una colección Qdrant propia (jina-clip-v2, 1024 dims) garantizada al arranque del worker.
 - **Córtex asíncrono sin broker** — cola de tareas sobre PostgreSQL con `SELECT ... FOR UPDATE SKIP LOCKED`.
@@ -89,7 +89,8 @@ pytest
 |---|---|---|
 | `coreai_dispatch_task` | ✅ Operativa | Única apertura de escritura: inyecta una tarea asíncrona (contrato del tipo obligatorio — ADR-006) con auto-vivificación de sesión/entidad si no se aportan IDs. |
 | `coreai_get_task` | ✅ Operativa | Consulta read-only del estado de una tarea (`task_id` → status + `error_trace`): la lectura write-then-read de la doctrina ADR-005. Respuesta pelada — el payload crudo nunca viaja. |
-| `coreai_search_context` | 🚧 En camino | Lectura síncrona read-only (ADR-005-002): la única otra apertura del sustrato, para rutas request-response en milisegundos. |
+| `coreai_search_context` | ✅ Operativa | Lectura síncrona read-only (ADR-005-002): búsqueda semántica sobre TODAS las colecciones de texto del inquilino, merge global por score y top_k tras el merge. Sin resultados sobre el umbral = no-match honesto. La consistencia con las ingestas es eventual. |
+| `coreai_search_image` | ✅ Operativa | Lectura síncrona read-only (identify, ADR-007): similitud visual contra la colección de imágenes con embed efímero de consulta — la imagen de consulta nunca se persiste. Tenancy simétrica con el recall de texto. |
 
 ## Mapa del repositorio
 
@@ -99,8 +100,8 @@ src/
   contracts/     # Registro central de contratos de tarea (ADR-006-001)
   db/            # SQLAlchemy: modelos, sesiones, repositorios (relacional + vectorial)
   managers/      # TaskManager, HybridMemoryManager, LLMClient, ConfigManager
-  mcp/tools/     # Superficie MCP (coreai_dispatch_task, coreai_get_task)
-  schemas/       # Contratos Pydantic: tasks, memory, llm
+  mcp/tools/     # Superficie MCP (coreai_dispatch_task, coreai_get_task, coreai_search_context, coreai_search_image)
+  schemas/       # Contratos Pydantic: tasks, memory, llm, recall
   workers/       # Router del córtex: TASK_REGISTRY + handlers por tipo de tarea
   main.py        # Servidor MCP STDIO ("sin red, sin FastAPI")
   worker.py      # Bucle del worker
@@ -123,13 +124,13 @@ scripts/         # prepare_model (+ prepare_clip_kit), schedulers/crontab
 | [002](docs/adr/002-removed-fallbacks.md) | Removed Fallbacks |
 | [003](docs/adr/003-base-observability.md) | Base Observability |
 | [004](docs/adr/004-mcp-tracer-bullet.md) | Tracer Bullet vía MCP (con post-mortem técnico) |
-| [005](docs/adr/005-unified-ingestion-doctrine.md) | Doctrina de Ingesta Unificada — escrituras vía event lane; única apertura síncrona read-only (en camino, #37) |
+| [005](docs/adr/005-unified-ingestion-doctrine.md) | Doctrina de Ingesta Unificada — escrituras vía event lane; apertura síncrona read-only acotada: recall de texto e imagen (✅ implementado, 26 oct) |
 | [006](docs/adr/006-mcp-contracts.md) | Contratos de Tarea MCP — validación síncrona en la frontera y exposición como resources (✅ implementado, 23 oct) |
 | [007](docs/adr/007-multimodal-memory.md) | Memoria Multimodal — adopción anticipada y acotada (identificación visual, demo ELIOS) (✅ implementado, 23 oct) |
 
 ## Estado del proyecto
 
-En desarrollo activo. El **Epic 4: Córtex Asíncrono** (issue #26) está en main desde el 21 de octubre — el sustrato expone `coreai_dispatch_task` + `coreai_get_task` (el recall read-only `coreai_search_context` vuelve con [ADR-005-002] #37) — y el epic permanece abierto hasta que aterricen los pospuestos (4.3 #29, 4.4 #30). El **ADR-006 (contratos de tarea)** y el **ADR-007 (memoria multimodal)** están implementados y validados E2E (23 oct): tres contratos registrados y publicados como resources, y la tubería de imagen completa — dispatch → contrato → worker → gateway LiteLLM → colección `images` — viva en main.
+En desarrollo activo. El **Epic 4: Córtex Asíncrono** (issue #26) está en main desde el 21 de octubre — el sustrato expone `coreai_dispatch_task` + `coreai_get_task` más el recall read-only síncrono (`coreai_search_context` + `coreai_search_image`, [ADR-005-002] #37, 26 oct: sweep por dominios, tenancy simétrica y embed efímero de consulta) — y el epic permanece abierto hasta que aterricen los pospuestos (4.3 #29, 4.4 #30). El **ADR-006 (contratos de tarea)** y el **ADR-007 (memoria multimodal)** están implementados y validados E2E (23 oct): tres contratos registrados y publicados como resources, y la tubería de imagen completa — dispatch → contrato → worker → gateway LiteLLM → colección `images` — viva en main.
 
 ---
 
