@@ -3,7 +3,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.database import AsyncSessionLocal
 from src.repositories.relational import TaskRepository
-from src.logging_config import configure_logging
+from src.logging_config import configure_logging, set_current_task_id, clear_current_task_id
 from src.managers.config_manager import config_manager
 from src.workers.task_router import route_task
 from src.db.vector_db import get_qdrant_client
@@ -28,7 +28,7 @@ async def ensure_collections() -> None:
     La colección de imágenes se creó a mano en su día: nada garantizaba su
     existencia en un despliegue limpio, y el handler moría asíncrono contra
     una colección inexistente. El worker la garantiza ANTES de consumir la
-    cola — sin ella, la asimilación de imágenes es imposible.
+    cola — sin ella, la asimiliación de imágenes es imposible.
     """
     client = await get_qdrant_client()
     repo = VectorRepository(client=client)
@@ -88,6 +88,13 @@ async def worker_loop():
                     task_id = task.id
                     
                     try:
+                        # Traza Loki por UUID (Issue 4.3, ADR-003): el contexto de
+                        # logging correlaciona TODAS las líneas de este ciclo
+                        # (router, handler, manager) con la tarea. El formato
+                        # lo renderiza como task=<uuid>; en Loki/Grafana se busca
+                        # el UUID y aparece la traza completa del ciclo de vida.
+                        set_current_task_id(task_id)
+                        
                         # Fase 2: Trabajo en memoria delegando al Enrutador (Registry)
                         await route_task(task, session)
                         
@@ -109,6 +116,10 @@ async def worker_loop():
                             task_id,
                             f"{type(execution_error).__name__}: {execution_error}",
                         )
+                    finally:
+                        # El ciclo de la tarea termina (bien o mal): suelta el
+                        # UUID del contexto para no filtrarlo a la siguiente.
+                        clear_current_task_id()
                 else:
                     # Cola vacía: relajamos el polling progresivamente
                     await asyncio.sleep(backoff)

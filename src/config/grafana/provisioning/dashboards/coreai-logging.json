@@ -1,0 +1,445 @@
+{
+  "annotations": { "list": [] },
+  "description": "Logging del stack coreAI vía driver Loki (ADR-003). Errores separados del resto del logging. Destino: src/config/grafana/provisioning/dashboards/coreai-logs.json",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["coreai", "loki", "logging", "observabilidad"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "DS",
+        "options": [],
+        "query": "loki",
+        "refresh": 1,
+        "regex": "",
+        "type": "datasource"
+      },
+      {
+        "allValue": ".+",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+        "datasource": { "type": "loki", "uid": "${DS}" },
+        "definition": "label_values(container_name)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Contenedor",
+        "multi": true,
+        "name": "contenedor",
+        "options": [],
+        "query": "label_values(container_name)",
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      },
+      {
+        "current": {},
+        "hide": 0,
+        "label": "Patrón de error (regex LogQL)",
+        "name": "patron_error",
+        "options": [],
+        "query": "(?i)(error|exception|traceback|critical|fatal)",
+        "type": "textbox"
+      },
+      {
+        "current": {},
+        "hide": 0,
+        "label": "Filtro libre (texto o UUID)",
+        "name": "filtro",
+        "options": [],
+        "query": "",
+        "type": "textbox"
+      }
+    ]
+  },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "coreAI · Logs",
+  "uid": "coreai-logs",
+  "version": 1,
+  "weekStart": "",
+  "panels": [
+    {
+      "type": "row",
+      "title": "Resumen",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Líneas de log (rango)",
+      "description": "Volumen total de logging del stack en la ventana temporal. Solo contenedores con driver Loki.",
+      "datasource": { "type": "loki", "uid": "${DS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "decimals": 0 },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justify": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({container_name=~\"$contenedor\"}[$__range]))",
+          "queryType": "instant",
+          "legendFormat": "líneas",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Errores (rango)",
+      "description": "Líneas que matchean la variable patron_error: error/exception/traceback/critical/fatal (case-insensitive). Ajustable sin tocar este JSON.",
+      "datasource": { "type": "loki", "uid": "${DS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justify": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum(count_over_time(({container_name=~\"$contenedor\"} |~ \"$patron_error\")[$__range]))",
+          "queryType": "instant",
+          "legendFormat": "errores",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Warnings (rango)",
+      "description": "Líneas WARNING/WARN del stack (formato Python %(levelname)s, avisos de uvicorn y LiteLLM).",
+      "datasource": { "type": "loki", "uid": "${DS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justify": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum(count_over_time(({container_name=~\"$contenedor\"} |~ \"(?i)(warning|warn)\")[$__range]))",
+          "queryType": "instant",
+          "legendFormat": "warnings",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Líneas/min (ahora)",
+      "description": "Ritmo de logging agregado del stack en los últimos 5 minutos. Ventana fija [5m] porque $__rate_interval no se interpola en queries instant.",
+      "datasource": { "type": "loki", "uid": "${DS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "decimals": 0 },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justify": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum(rate({container_name=~\"$contenedor\"}[5m])) * 60",
+          "queryType": "instant",
+          "legendFormat": "líneas/min",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "piechart",
+      "title": "Volumen por contenedor (rango)",
+      "description": "Reparto del logging entre los contenedores con driver Loki: coreai_litellm, coreai_infinity, coreai_mcp, coreai_worker.",
+      "datasource": { "type": "loki", "uid": "${DS}" },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 1 },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "options": {
+        "displayLabels": ["name", "percent"],
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true, "values": [] },
+        "pieType": "pie",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum by (container_name) (count_over_time({container_name=~\"$contenedor\"}[$__range]))",
+          "queryType": "range",
+          "legendFormat": "{{container_name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Volumen",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Líneas/min por contenedor (todo el stack)",
+      "description": "Volumen de logging por contenedor, apilado. Huecos = contenedor sin logging (o caído).",
+      "datasource": { "type": "loki", "uid": "${DS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "líneas/min",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "normal" },
+            "thresholdsStyle": { "mode": "off" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum by (container_name) (rate({container_name=~\"$contenedor\"}[$__interval])) * 60",
+          "queryType": "range",
+          "legendFormat": "{{container_name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Errores/min por contenedor",
+      "description": "Solo líneas que matchean patron_error. Picos aquí = el panel rojo de abajo tiene el detalle línea a línea.",
+      "datasource": { "type": "loki", "uid": "${DS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "errores/min",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "line" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "green", "value": null },
+                { "color": "red", "value": 1 }
+              ]
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "sum by (container_name) (rate(({container_name=~\"$contenedor\"} |~ \"$patron_error\")[$__interval])) * 60",
+          "queryType": "range",
+          "legendFormat": "{{container_name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Errores separados del resto",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "logs",
+      "title": "🔴 Errores — todo el stack",
+      "description": "Todas las líneas que matchean patron_error, de todos los contenedores con driver Loki. El panel de al lado excluye exactamente estas líneas.",
+      "datasource": { "type": "loki", "uid": "${DS}" },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 15 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "sortOrder": "Descending",
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "enableInfiniteScrolling": false,
+        "showLabels": true,
+        "showTime": true,
+        "wrapLogMessages": true,
+        "prettifyLogMessage": false
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "({container_name=~\"$contenedor\"} |~ \"$patron_error\" |~ \"$filtro\")",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "logs",
+      "title": "Log general — errores excluidos",
+      "description": "El resto del logging del stack: mismas líneas de siempre menos las que matchean patron_error. Con la variable filtro puedes seguir un task_id/UUID en ambos paneles a la vez.",
+      "datasource": { "type": "loki", "uid": "${DS}" },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 15 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "sortOrder": "Descending",
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "enableInfiniteScrolling": false,
+        "showLabels": true,
+        "showTime": true,
+        "wrapLogMessages": true,
+        "prettifyLogMessage": false
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "${DS}" },
+          "editorMode": "code",
+          "expr": "({container_name=~\"$contenedor\"} !~ \"$patron_error\" |~ \"$filtro\")",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Notas",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 14,
+      "type": "text",
+      "title": "Notas",
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 26 },
+      "datasource": { "type": "datasource", "uid": "-- Grafana --" },
+      "options": {
+        "mode": "markdown",
+        "content": "🧩 **Cobertura del driver Loki** [REPO, compose @ main]: solo `coreai_litellm`, `coreai_infinity`, `coreai_mcp` y `coreai_worker` montan `logging: *loki-logging`. Postgres, Qdrant y Adminer NO llegan a Loki — para cubrirlos, añade `logging: *loki-logging` a su servicio en el compose y `docker compose up -d <servicio>`.\n\n🚀 **`coreai_mcp` es contenedor lanzadera** (`tail -f /dev/null`): el servidor MCP real se spawnea vía `docker exec`, que NO alimenta el logging driver — sus trazas solo viven en el panel MCP del cliente IDE. No esperes protocolo aquí.\n\n🎯 **Patrón de error** (variable `patron_error`): el logging Python del stack usa `%(asctime)s - %(name)s - %(levelname)s - %(message)s`, así que `- ERROR -`, `CRITICAL` y los `Traceback` caen aquí; también los `ERROR` de LiteLLM y de uvicorn/Infinity. Es un textbox: ajústalo en vivo sin tocar el JSON.\n\n🔎 **Filtro libre** (`filtro`): pega un `task_id`/UUID para seguir su traza en los dos paneles de logs a la vez; vacío = sin filtro extra.\n\n🧪 **Si un panel queda vacío**: verifica los labels reales en Explore con `{container_name=~\"coreai_.*\"}`.\n\n📁 **Deploy**: copia este JSON a `src/config/grafana/provisioning/dashboards/` y `docker compose restart grafana` (el provider coreai recarga cada 30 s)."
+      },
+      "targets": []
+    }
+  ]
+}

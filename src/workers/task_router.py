@@ -83,10 +83,17 @@ async def handle_dummy_test_task(task: Task, session: AsyncSession) -> None:
 async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
     """
     Manejador para tareas de vectorización de eventos.
-    Extrae la relación jerárquica desde Postgres, busca el contenido de forma flexible,
-    y asimila la memoria en el grafo híbrido.
+    Extrae la relación jerárquica desde Postgres, lee el contenido con
+    extracción ESTRICTA por contrato (ADR-006: la frontera ya validó y
+    normalizó el payload en el dispatch), y asimila la memoria en el grafo
+    híbrido.
     """
-    logger.info("  [Worker] Vectorizando evento para la tarea %s", task.id)
+    # Máscara greenlet (lección #61): el rollback del manager expira la instancia `task`
+    # (expire_on_commit=False no protege: el rollback expira SIEMPRE). Se captura task_id
+    # ANTES del await; tras un rollback, task.* revienta con MissingGreenlet y reemplaza
+    # al error real en el error_trace del DLQ.
+    task_id = task.id
+    logger.info("  [Worker] Vectorizando evento para la tarea %s", task_id)
 
     payload = task.payload
 
@@ -107,19 +114,21 @@ async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
     entity_id = db_session.entity_id
 
     # =================================================================
-    # FASE 2: Extracción Resiliente (Protección contra alucinaciones de claves)
+    # FASE 2: Extracción Estricta (purga de la extracción tolerante, 4.3)
     # =================================================================
-    content = None
-    # Buscamos en una lista de candidatos comunes en lugar de forzar una sola clave
-    for candidate_key in ["content", "summary_content", "text", "data", "detailed_summary"]:
-        if candidate_key in payload and payload[candidate_key]:
-            content = payload[candidate_key]
-            break
-
+    # La frontera ya validó y normalizó el payload contra el contrato
+    # (VectorizeEventPayload) en el dispatch: 'content' es clave obligatoria
+    # y única. La lista de claves candidatas era un backstop de la era
+    # pre-contratos (decisión ADR-006): hoy es código inalcanzable para
+    # payloads legítimos y solo puede enmascarar corrupción de cola. Una
+    # clave ausente NO es flexibilidad: es corrupción.
+    content = payload.get("content")
     if not content:
         raise ValueError(
-            f"No se encontró texto para vectorizar. Claves buscadas: "
-            f"content, summary_content, text, data. Payload actual: {payload}"
+            f"El payload de la tarea {task.id} no trae 'content' (contrato "
+            f"vectorize_event). La frontera ya valida y normaliza la forma "
+            f"en el dispatch: esto solo puede ser corrupción de cola. "
+            f"Payload actual: {payload}"
         )
 
     domain_str = payload.get("domain", "SYSTEM")
@@ -158,11 +167,11 @@ async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
 
     except ValueError as validation_error:
         # Captura de errores de casting de Enums (como lo de las mayúsculas)
-        logger.error("  [Worker] Error de validación interna (Task %s): %s", task.id, validation_error)
+        logger.error("  [Worker] Error de validación interna (Task %s): %s", task_id, validation_error)
         raise
     except Exception as execution_error:
         # Fallos de red, Qdrant, Postgres o Infinity
-        logger.error("  [Worker] Error de ejecución en vectorización (Task %s): %s", task.id, execution_error)
+        logger.error("  [Worker] Error de ejecución en vectorización (Task %s): %s", task_id, execution_error)
         raise
 
 
@@ -334,8 +343,19 @@ async def handle_consolidate_memory(task: Task, session: AsyncSession) -> None:
     Manejador para tareas de consolidación de memoria.
     Procesa una ventana temporal del dominio especificado y asimila 
     la memoria consolidada en el grafo híbrido.
+
+    Limitación conocida de la v1 (BUG-006 #69): la agrupación es puramente
+    temporal — una ventana heterogénea fusiona recuerdos sin relación en
+    un mismo resumen (contaminación semántica permanente: el resumen queda
+    embebido y se sirve en cada recall futuro). Evolución por temática
+    (selección semántica) en el BUG-006 #69.
     """
-    logger.info("  [Worker] Consolidando memoria para la tarea %s", task.id)
+    # Máscara greenlet (lección #61): el rollback del manager expira la instancia `task`
+    # (expire_on_commit=False no protege: el rollback expira SIEMPRE). Se captura task_id
+    # ANTES del await; tras un rollback, task.* revienta con MissingGreenlet y reemplaza
+    # al error real en el error_trace del DLQ.
+    task_id = task.id
+    logger.info("  [Worker] Consolidando memoria para la tarea %s", task_id)
 
     payload = task.payload
 
@@ -396,10 +416,10 @@ async def handle_consolidate_memory(task: Task, session: AsyncSession) -> None:
         logger.info("  [Worker] Consolidación de memoria completada con éxito para task %s", task.id)
 
     except ValueError as validation_error:
-        logger.error("  [Worker] Error de validación en consolidación (Task %s): %s", task.id, validation_error)
+        logger.error("  [Worker] Error de validación en consolidación (Task %s): %s", task_id, validation_error)
         raise
     except Exception as execution_error:
-        logger.error("  [Worker] Error de ejecución en consolidación (Task %s): %s", task.id, execution_error)
+        logger.error("  [Worker] Error de ejecución en consolidación (Task %s): %s", task_id, execution_error)
         raise
 
 # =====================================================================

@@ -26,8 +26,35 @@ class EmbeddingResponse(BaseModel):
     model: str
     usage: EmbeddingUsage
 
-# --- COMPLETIONS (Opcional para cuando ataquemos texto) ---
+# --- COMPLETIONS (consolidación de memoria, Issue 4.3 #29) ---
 class CompletionRequest(BaseModel):
-    model: str
-    messages: list[dict[str, str]]
+    """Petición de chat completion vía gateway (grupo 'local-fallback' → LM Studio del host)."""
+    model: str = Field(
+        ...,
+        description="Grupo del modelo enrutado en LiteLLM (p. ej. 'local-fallback').",
+    )
+    messages: list[dict[str, str]] = Field(
+        ...,
+        description="Mensajes en formato OpenAI: system/user/assistant.",
+    )
     temperature: float = 0.0
+
+class CompletionUsage(BaseModel):
+    """Factura de una generación: en chat completions el relleno es obligatorio."""
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+class CompletionChoice(BaseModel):
+    """Una elección de respuesta del modelo de chat."""
+    message: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Mensaje del asistente: {'role': 'assistant', 'content': ...}.",
+    )
+    finish_reason: str | None = None
+
+class CompletionResponse(BaseModel):
+    """Respuesta del gateway a una chat completion (formato OpenAI; LM Studio lo respeta)."""
+    choices: list[CompletionChoice] = Field(default_factory=list)
+    model: str
+    usage: CompletionUsage
