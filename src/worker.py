@@ -6,12 +6,15 @@ from src.repositories.relational import TaskRepository
 from src.logging_config import configure_logging, set_current_task_id, clear_current_task_id
 from src.managers.config_manager import config_manager
 from src.workers.task_router import route_task
+from src.schemas.memory import DomainType
 from src.db.vector_db import get_qdrant_client
 from src.repositories.vector import (
     VectorRepository,
     IMAGE_COLLECTION,
     IMAGE_VECTOR_SIZE,
     IMAGE_VECTOR_DISTANCE,
+    TEXT_VECTOR_SIZE,
+    TEXT_VECTOR_DISTANCE,
 )
 
 configure_logging(level=config_manager.get_app_config()["log_level"])
@@ -23,15 +26,33 @@ MAX_BACKOFF = 30.0
 
 async def ensure_collections() -> None:
     """
-    Garantía idempotente de las colecciones derivadas del sistema (ADR-007-002, #50).
+    Garantía idempotente de TODAS las colecciones derivadas del sistema
+    (ADR-007-002 #50; BUG-001 #34).
 
     La colección de imágenes se creó a mano en su día: nada garantizaba su
     existencia en un despliegue limpio, y el handler moría asíncrono contra
-    una colección inexistente. El worker la garantiza ANTES de consumir la
-    cola — sin ella, la asimiliación de imágenes es imposible.
+    una colección inexistente. Las colecciones de TEXTO por dominio
+    (document, conversation, system — multilingual-e5-small, 384 dims,
+    coseno) tenían el mismo agujero hasta el BUG-001: un `docker-compose
+    down -v` seguido de arranque limpio las auto-genera TODAS sin
+    intervención manual, y el arranque es idempotente (comparación de
+    nombres, nunca try/except). Si una colección preexistente trae dims
+    de otro modelo, el arranque revienta explícito — la topología se
+    valida ANTES de aceptar tráfico, no tarea a tarea en el upsert.
     """
     client = await get_qdrant_client()
     repo = VectorRepository(client=client)
+
+    # Colecciones de texto: una por cada dominio del catálogo (BUG-001 #34),
+    # mismas dims que el embedding de texto que genera _get_embedding.
+    for domain in DomainType:
+        await repo.ensure_collection(
+            collection_name=domain.value,
+            vector_size=TEXT_VECTOR_SIZE,
+            distance=TEXT_VECTOR_DISTANCE,
+        )
+
+    # Colección de imágenes (jina-clip-v2, 1024 dims — ADR-007-002 #50).
     await repo.ensure_collection(
         collection_name=IMAGE_COLLECTION,
         vector_size=IMAGE_VECTOR_SIZE,
@@ -41,11 +62,12 @@ async def ensure_collections() -> None:
 
 async def worker_loop():
     # =================================================================
-    # ARRANQUE: garantía de colecciones con backoff (ADR-007-002 #50).
-    # Qdrant puede estar todavía levantándose (el worker no declara
-    # depends_on sobre él): no morimos por orden de arranque — reintentamos
-    # con el mismo backoff que el bucle. Pero NO consumimos la cola hasta
-    # que las colecciones estén garantizadas.
+    # ARRANQUE: garantía de colecciones con backoff (ADR-007-002 #50,
+    # BUG-001 #34). Qdrant puede estar todavía levantándose (el worker
+    # no declara depends_on sobre él): no morimos por orden de arranque
+    # — reintentamos con el mismo backoff que el bucle. Pero NO
+    # consumimos la cola hasta que la topología completa esté
+    # garantizada y validada.
     # =================================================================
     boot_backoff = INITIAL_BACKOFF
     while True:
