@@ -18,10 +18,13 @@ Decisiones que estos tests defienden (26 oct):
 - DoD: tools/list son EXACTAMENTE las dos de tasks + las dos de recall.
 """
 
+import base64
+import io
 import uuid
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from PIL import Image
 
 from src.schemas.llm import (
     EmbeddingResponse,
@@ -35,16 +38,19 @@ from src.managers.memory_manager import HybridMemoryManager, MissingCollectionEr
 from src.mcp.tools.recall_tools import get_recall_tools, handle_recall_tool
 from src.mcp.tools.task_tools import get_task_tools
 
-# 1x1 JPEG real en base64: el mismo mínimo viable del contrato de imagen.
-VALID_IMAGE_DATA_URI = (
-    "data:image/jpeg;base64,"
-    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a"
-    "HBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjI"
-    "yMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/"
-    "8QAFQABAQAAAAAAAAAAAAAAAAAAAAP/xAAUEAEAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAA"
-    "AAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCdABmX/9k="
-)
+def _data_uri_jpeg_real() -> str:
+    """JPEG real generado con PIL — el mismo mínimo viable del contrato de
+    imagen (patrón de test_contract_registry): la frontera exige imagen
+    decodificable y un base64 artesanal ya no pasa. El fixture original de
+    este archivo tenía el cuerpo base64 corrupto (403 caracteres, padding
+    inválido) y rebotaba en la validación de RecallImageRequest."""
+    imagen = Image.new("RGB", (2, 2), (255, 0, 0))
+    buffer = io.BytesIO()
+    imagen.save(buffer, format="JPEG")
+    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode()
 
+
+VALID_IMAGE_DATA_URI = _data_uri_jpeg_real()
 DOC_POINT_ID = "11111111-1111-1111-1111-111111111111"
 CONV_POINT_ID = "22222222-2222-2222-2222-222222222222"
 SYS_POINT_ID = "33333333-3333-3333-3333-333333333333"
