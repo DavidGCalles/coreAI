@@ -88,7 +88,12 @@ async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
     normalizó el payload en el dispatch), y asimila la memoria en el grafo
     híbrido.
     """
-    logger.info("  [Worker] Vectorizando evento para la tarea %s", task.id)
+    # Máscara greenlet (lección #61): el rollback del manager expira la instancia `task`
+    # (expire_on_commit=False no protege: el rollback expira SIEMPRE). Se captura task_id
+    # ANTES del await; tras un rollback, task.* revienta con MissingGreenlet y reemplaza
+    # al error real en el error_trace del DLQ.
+    task_id = task.id
+    logger.info("  [Worker] Vectorizando evento para la tarea %s", task_id)
 
     payload = task.payload
 
@@ -162,11 +167,11 @@ async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
 
     except ValueError as validation_error:
         # Captura de errores de casting de Enums (como lo de las mayúsculas)
-        logger.error("  [Worker] Error de validación interna (Task %s): %s", task.id, validation_error)
+        logger.error("  [Worker] Error de validación interna (Task %s): %s", task_id, validation_error)
         raise
     except Exception as execution_error:
         # Fallos de red, Qdrant, Postgres o Infinity
-        logger.error("  [Worker] Error de ejecución en vectorización (Task %s): %s", task.id, execution_error)
+        logger.error("  [Worker] Error de ejecución en vectorización (Task %s): %s", task_id, execution_error)
         raise
 
 
@@ -345,7 +350,12 @@ async def handle_consolidate_memory(task: Task, session: AsyncSession) -> None:
     embebido y se sirve en cada recall futuro). Evolución por temática
     (selección semántica) en el BUG-006 #69.
     """
-    logger.info("  [Worker] Consolidando memoria para la tarea %s", task.id)
+    # Máscara greenlet (lección #61): el rollback del manager expira la instancia `task`
+    # (expire_on_commit=False no protege: el rollback expira SIEMPRE). Se captura task_id
+    # ANTES del await; tras un rollback, task.* revienta con MissingGreenlet y reemplaza
+    # al error real en el error_trace del DLQ.
+    task_id = task.id
+    logger.info("  [Worker] Consolidando memoria para la tarea %s", task_id)
 
     payload = task.payload
 
@@ -406,10 +416,10 @@ async def handle_consolidate_memory(task: Task, session: AsyncSession) -> None:
         logger.info("  [Worker] Consolidación de memoria completada con éxito para task %s", task.id)
 
     except ValueError as validation_error:
-        logger.error("  [Worker] Error de validación en consolidación (Task %s): %s", task.id, validation_error)
+        logger.error("  [Worker] Error de validación en consolidación (Task %s): %s", task_id, validation_error)
         raise
     except Exception as execution_error:
-        logger.error("  [Worker] Error de ejecución en consolidación (Task %s): %s", task.id, execution_error)
+        logger.error("  [Worker] Error de ejecución en consolidación (Task %s): %s", task_id, execution_error)
         raise
 
 # =====================================================================
