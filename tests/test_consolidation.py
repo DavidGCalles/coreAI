@@ -172,11 +172,15 @@ async def test_consolidacion_happy_path(manager):
         str(privado.id), str(compartido.id)
     }
 
-    # ...dos facturas en llm_audit: embedding del resumen + completion del LLM.
+    # ...dos facturas en llm_audit, en el orden del flujo: la completion
+    # del LLM primero (el resumen se genera) y el embedding del resumen
+    # después (al reinyectarlo).
     assert audit_repo.create.await_count == 2
-    factura_completion = audit_repo.create.await_args_list[1].kwargs
+    factura_completion = audit_repo.create.await_args_list[0].kwargs
     assert factura_completion["model_used"] == "local-fallback"
     assert factura_completion["completion_tokens"] == 20
+    factura_embedding = audit_repo.create.await_args_list[1].kwargs
+    assert factura_embedding["model_used"] == "text-embedding"
 
     # ...marca de orígenes y UN solo commit que asienta todo junto.
     relational_repo.mark_consolidated.assert_awaited_once_with([privado.id, compartido.id])
