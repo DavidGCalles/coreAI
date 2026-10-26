@@ -89,8 +89,8 @@ pytest
 |---|---|---|
 | `coreai_dispatch_task` | ✅ Operativa | Única apertura de escritura: inyecta una tarea asíncrona (contrato del tipo obligatorio — ADR-006) con auto-vivificación de sesión/entidad si no se aportan IDs. |
 | `coreai_get_task` | ✅ Operativa | Consulta read-only del estado de una tarea (`task_id` → status + `error_trace`): la lectura write-then-read de la doctrina ADR-005. Respuesta pelada — el payload crudo nunca viaja. |
-| `coreai_search_context` | ✅ Operativa | Lectura síncrona read-only (ADR-005-002): búsqueda semántica sobre TODAS las colecciones de texto del inquilino, merge global por score y top_k tras el merge. Sin resultados sobre el umbral = no-match honesto. La consistencia con las ingestas es eventual. |
-| `coreai_search_image` | ✅ Operativa | Lectura síncrona read-only (identify, ADR-007): similitud visual contra la colección de imágenes con embed efímero de consulta — la imagen de consulta nunca se persiste. Tenancy simétrica con el recall de texto. |
+| `coreai_search_context` | ✅ Operativa | Lectura síncrona read-only (ADR-005-002): búsqueda semántica sobre TODAS las colecciones de texto, merge global por score y top_k tras el merge. Sin resultados sobre el umbral = no-match honesto. La consistencia con las ingestas es eventual. |
+| `coreai_search_image` | ✅ Operativa | Lectura síncrona read-only (identify, ADR-007): similitud visual contra la colección de imágenes con embed efímero de consulta — la imagen de consulta nunca se persiste. Misma superficie de filtros que el recall de texto (proyecto, top_k, umbral de visión). |
 
 ## Mapa del repositorio
 
@@ -130,7 +130,7 @@ scripts/         # prepare_model (+ prepare_clip_kit), schedulers/crontab
 
 ## Estado del proyecto
 
-En desarrollo activo. El **Epic 4: Córtex Asíncrono** (issue #26) está en main desde el 21 de octubre — el sustrato expone `coreai_dispatch_task` + `coreai_get_task` más el recall read-only síncrono (`coreai_search_context` + `coreai_search_image`, [ADR-005-002] #37, 26 oct: sweep por dominios, tenancy simétrica y embed efímero de consulta) — y el epic permanece abierto hasta que aterricen los pospuestos (4.3 #29, 4.4 #30). El **ADR-006 (contratos de tarea)** y el **ADR-007 (memoria multimodal)** están implementados y validados E2E (23 oct): tres contratos registrados y publicados como resources, y la tubería de imagen completa — dispatch → contrato → worker → gateway LiteLLM → colección `images` — viva en main.
+En desarrollo activo. El **Epic 4: Córtex Asíncrono** (issue #26) está en main desde el 21 de octubre — el sustrato expone `coreai_dispatch_task` + `coreai_get_task` más el recall read-only síncrono (`coreai_search_context` + `coreai_search_image`, [ADR-005-002] #37, 26 oct: sweep por dominios, filtro por proyecto y embed efímero de consulta) — y el epic permanece abierto hasta que aterricen los pospuestos (4.3 #29, 4.4 #30). El **ADR-006 (contratos de tarea)** y el **ADR-007 (memoria multimodal)** están implementados y validados E2E (23 oct): tres contratos registrados y publicados como resources, y la tubería de imagen completa — dispatch → contrato → worker → gateway LiteLLM → colección `images` — viva en main.
 
 ---
 
