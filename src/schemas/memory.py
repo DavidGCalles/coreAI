@@ -38,8 +38,9 @@ class CoreMemoryNode(BaseModel):
 class MemorySearchFilters(BaseModel):
     """Parámetros de entrada para consultas al motor vectorial."""
     tenant_id: str = Field(..., description="ID del propietario para aislamiento de datos.")
-    query: str = Field(..., description="Texto en lenguaje natural para la búsqueda semántica.")
+    query: str = Field("", description="Texto de consulta — lo embebe el llamador; el repositorio solo filtra.")
     domain: DomainType | None = Field(None, description="Filtrar por un dominio específico.")
+    project: str | None = Field(None, description="Filtro exacto por proyecto (FR-3): clave plana 'project' del payload, simétrica en texto e imagen.")
     tags_any: list[str] | None = Field(None, description="OR: contiene alguna de estas etiquetas.")
     tags_all: list[str] | None = Field(None, description="AND: contiene todas estas etiquetas.")
     properties_match: dict[str, Any] | None = Field(None, description="Filtro exacto por propiedades clave-valor.")

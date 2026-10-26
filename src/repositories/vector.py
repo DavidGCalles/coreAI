@@ -58,6 +58,16 @@ class VectorRepository:
             collection_name, vector_size, distance,
         )
 
+    async def collection_names(self) -> set[str]:
+        """
+        Nombres de las colecciones existentes en el vector store.
+        El manager decide qué hacer con la ausencia — el repositorio no
+        inventa política: solo reporta lo que hay.
+        """
+        return {
+            c.name for c in (await self.client.get_collections()).collections
+        }
+
     def _build_filter(self, filters: MemorySearchFilters) -> models.Filter:
         """Traduce los filtros semánticos de Pydantic al dialecto duro de Qdrant."""
         must_conditions = []
@@ -69,6 +79,16 @@ class VectorRepository:
                 match=models.MatchValue(value=filters.tenant_id)
             )
         )
+
+        # Proyecto (FR-3, #51): clave plana del payload, simétrica en los
+        # puntos de texto y de imagen — el filtro del recall la comparte.
+        if filters.project is not None:
+            must_conditions.append(
+                models.FieldCondition(
+                    key="project",
+                    match=models.MatchValue(value=filters.project)
+                )
+            )
 
         if filters.tags_all:
             for tag in filters.tags_all:
@@ -157,16 +177,20 @@ class VectorRepository:
         )
 
     async def search(
-        self, 
-        domain: DomainType, 
-        query_vector: list[float], 
+        self,
+        domain: "DomainType | str",
+        query_vector: list[float],
         filters: MemorySearchFilters
     ) -> list[models.ScoredPoint]:
         """
         Búsqueda por similitud adaptada a la v1.19.0 (query_points).
         Devuelve los puntos crudos; la deserialización es problema de una capa superior.
+
+        Acepta un DomainType (colección de texto por dominio) o el nombre
+        plano de una colección (p. ej. la de imágenes): el repositorio es
+        mudo y no conoce jerarquías de dominio.
         """
-        collection = domain.value
+        collection = domain.value if isinstance(domain, DomainType) else str(domain)
         qdrant_filter = self._build_filter(filters)
 
         try:
