@@ -237,6 +237,15 @@ class HybridMemoryManager:
         construcción: lo ya consolidado nunca se re-procesa; ventana sin
         candidatos es un no-op limpio.
 
+        Limitaciones conocidas de la v1 (BUG-006 #69): la agrupación es
+        puramente temporal (inquilino + dominio + ventana) — no hay criterio
+        semántico. Una ventana heterogénea fusiona recuerdos sin relación
+        en un mismo resumen, y ese resumen queda embebido en Qdrant y se
+        sirve en cada recall futuro: contaminación semántica permanente del
+        inquilino. La evolución (consolidación por temática solicitada,
+        selección semántica con límite de cantidad en tokens) vive en el
+        BUG-006 #69.
+
         Returns:
             UUID del evento resumen, o None si la ventana no trajo candidatos.
         """

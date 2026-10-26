@@ -338,6 +338,12 @@ async def handle_consolidate_memory(task: Task, session: AsyncSession) -> None:
     Manejador para tareas de consolidación de memoria.
     Procesa una ventana temporal del dominio especificado y asimila 
     la memoria consolidada en el grafo híbrido.
+
+    Limitación conocida de la v1 (BUG-006 #69): la agrupación es puramente
+    temporal — una ventana heterogénea fusiona recuerdos sin relación en
+    un mismo resumen (contaminación semántica permanente: el resumen queda
+    embebido y se sirve en cada recall futuro). Evolución por temática
+    (selección semántica) en el BUG-006 #69.
     """
     logger.info("  [Worker] Consolidando memoria para la tarea %s", task.id)
 
