@@ -65,6 +65,10 @@ services:
     logging: *loki-logging
 
   infinity:
+    # BUG-007 (#72): nombre explícito — los servicios build sin image: se
+    # nombran <proyecto>-<servicio>, y desde stacks incluidos (elios-client)
+    # eso fuerza un rebuild imposible (submodule sin modelos en contexto).
+    image: coreai/infinity:local
     build:
       context: .
       dockerfile: Dockerfile.infinity
@@ -89,6 +93,8 @@ services:
     logging: *loki-logging
 
   core-mcp:
+    # BUG-007 (#72): mismo Dockerfile que worker-node → misma imagen.
+    image: coreai/core:local
     build:
       context: .
       dockerfile: Dockerfile
@@ -115,6 +121,8 @@ services:
     logging: *loki-logging
 
   worker-node:
+    # BUG-007 (#72): ver core-mcp — una sola build compartida.
+    image: coreai/core:local
     build:
       context: .
       dockerfile: Dockerfile
