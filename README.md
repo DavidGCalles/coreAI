@@ -21,7 +21,7 @@
 flowchart LR
     CLIENT["Cliente de borde<br/>(Cline / IDE / agente)"]
     subgraph DOCKER["coreAI · docker compose"]
-        MCP["Servidor MCP<br/>(STDIO · docker exec -i)"]
+        MCP["Frontera MCP<br/>(STDIO por exec · Streamable HTTP :8000)"]
         PG[("PostgreSQL<br/>fuente de verdad + cola de tareas")]
         WORKER["Worker · Córtex Asíncrono"]
         QDRANT[("Qdrant<br/>vectores derivados")]
@@ -46,7 +46,7 @@ flowchart LR
 | qdrant | `coreai_qdrant` | 6333 | Memoria vectorial derivada (colecciones por dominio; colección de imagen propia — ADR-007) |
 | litellm | `coreai_litellm` | 4000 | Gateway OpenAI-compatible: enrutado de modelos, logs y métricas |
 | infinity | `coreai_infinity` | 8080 | Embeddings locales servidos desde `/data`: texto (`e5-small`), NLI (DeBERTa-v3) e imagen (`jina-clip-v2`, ADR-007) |
-| core-mcp | `coreai_mcp` | — | Lanzadera: el servidor MCP se spawnea por cliente vía `docker exec -i` (STDIO, sin red) |
+| core-mcp | `coreai_mcp` | 8000 | Frontera MCP: el service sirve streamable HTTP (red interna + host); STDIO sigue siendo un proceso por `docker exec -i` (patrón IDE) |
 | worker-node | `coreai_worker` | — | Córtex asíncrono: reclama tareas y ejecuta los handlers |
 | adminer | `coreai_adminer` | 8081 | Administración de la base de datos |
 | loki / prometheus / grafana | `coreai_loki` / `coreai_prometheus` / `coreai_grafana` | 3100 (solo loopback) / — / 3000 | Observabilidad: logs, métricas y dashboards |
@@ -76,6 +76,10 @@ pytest
     "coreai": {
       "command": "docker",
       "args": ["exec", "-i", "coreai_mcp", "python", "-m", "src.main"]
+    },
+    "coreai_http": {
+      "url": "http://localhost:8000/mcp",
+      "type": "streamableHttp"
     }
   }
 }
@@ -103,7 +107,7 @@ src/
   mcp/tools/     # Superficie MCP (coreai_dispatch_task, coreai_get_task, coreai_search_context, coreai_search_image)
   schemas/       # Contratos Pydantic: tasks, memory, llm, recall
   workers/       # Router del córtex: TASK_REGISTRY + handlers por tipo de tarea
-  main.py        # Servidor MCP STDIO ("sin red, sin FastAPI")
+  main.py        # Frontera MCP: STDIO + streamable HTTP (--serving stdio|http|dual)
   worker.py      # Bucle del worker
 docs/            # PRD, vision, moscow, roadmap (es/en) + adr/
 tests/           # Suite pytest (BD de test protegida por cortafuegos en conftest)
@@ -127,6 +131,7 @@ scripts/         # prepare_model (+ prepare_clip_kit), schedulers/crontab
 | [005](docs/adr/005-unified-ingestion-doctrine.md) | Doctrina de Ingesta Unificada — escrituras vía event lane; apertura síncrona read-only acotada: recall de texto e imagen (✅ implementado, 26 oct) |
 | [006](docs/adr/006-mcp-contracts.md) | Contratos de Tarea MCP — validación síncrona en la frontera y exposición como resources (✅ implementado, 23 oct) |
 | [007](docs/adr/007-multimodal-memory.md) | Memoria Multimodal — adopción anticipada y acotada (identificación visual, demo ELIOS) (✅ implementado, 23 oct) |
+| [008](docs/adr/008-mcp-streamable-http.md) | Superficie MCP sobre Streamable HTTP — el mismo server sirve STDIO y streamable HTTP; service del compose en http (✅ implementado, 28 oct) |
 
 ## Estado del proyecto
 
