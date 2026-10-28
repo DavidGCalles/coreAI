@@ -143,7 +143,7 @@ def _validar_imagen_raster(data_uri: str) -> str | None:
 
 
 class VectorizeImageEventPayload(TaskPayloadContract):
-    """Contrato de `vectorize_image_event`: vectoriza una imagen raster = genera su embedding numérico para búsqueda semántica (nada que ver con gráficos vectoriales/SVG — raster-only). La imagen viaja como data URI base64, autocontenida, y se valida decodificable y completa en el dispatch."""
+    """Contrato de `vectorize_image_event`: vectoriza una imagen raster = genera su embedding numérico para búsqueda semántica (nada que ver con gráficos vectoriales/SVG — raster-only). La imagen viaja como data URI base64, autocontenida, y se valida decodificable y completa en el dispatch. Puede llevar `content`: una descripción textual legible que persiste en el payload del punto y el recall devuelve en el hit (BUG-009 #84 — campo genérico de la memoria multimodal, mimetiza el contrato del evento de texto; qué texto mete y quién lo dice es del edge client del inquilino)."""
 
     image: str = Field(
         ...,
@@ -154,6 +154,18 @@ class VectorizeImageEventPayload(TaskPayloadContract):
             "generar el embedding numérico para búsqueda semántica. Sin "
             "paths: el payload debe ser autocontenido. La imagen debe ser "
             "decodificable y completa — se valida en el dispatch."
+        ),
+    )
+    content: str | None = Field(
+        None,
+        min_length=1,
+        description=(
+            "Descripción textual legible del punto de imagen. Opcional y "
+            "retrocompatible: sin él, el payload actual valida idéntico. "
+            "Si se registra, persiste en el payload del punto y el recall "
+            "lo devuelve en el content del hit — quien describe al "
+            "registrar, identifica al buscar. No se embebe ni crea punto "
+            "de texto: quien quiera texto buscable ya tiene vectorize_event."
         ),
     )
     project: str | None = Field(
