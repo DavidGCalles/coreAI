@@ -1,25 +1,42 @@
 <!--
-Plantilla de ADR — extraída de la estructura vigente (ADR-006/007/008).
+Plantilla de ADR — dialecto MADR: estructura coreAI (extraída de ADR-006/007/008)
++ secciones adoptadas de MADR oficial (adr/madr): Decision Drivers,
+Considered Options y Pros and Cons of the Options.
 Convenciones:
 - Fichero: docs/adr/NNN-slug.md (siguiente número libre).
 - Regla de la casa: el doc del ADR aterriza al repo con el arranque de la familia de issues, no al final.
-- La sección Post-implementación se añade SOLO tras implementar; bórrala del draft hasta entonces.
+- Post-implementación se añade SOLO tras implementar; bórrala del draft hasta entonces.
+- Pros and Cons of the Options es opcional: si el análisis de alternativas ya vive en un
+  issue de spike (p. ej. [ADR-XXX-001]), referéncialo aquí en vez de duplicarlo.
 -->
 
 # ADR-XXX: Nombre de la decisión — Tesis en una frase
 
 ## Status
-Accepted (fecha) — familia [ADR-XXX] completada: [ADR-XXX-001] #NN, [ADR-XXX-002] #NN (PR #NN). Estado del cabósito heredado, si aplica.
+Accepted (fecha) — familia [ADR-XXX] completada: [ADR-XXX-001] #NN, [ADR-XXX-002] #NN (PR #NN). Cabósito heredado, si aplica.
 
-<!-- Durante el draft: Proposed. Al aceptar: Accepted + fecha. Actualizar conforme la familia de sub-issues avanza. -->
+<!-- Durante el draft: Proposed. Al aceptar: Accepted + fecha. Vocabulario MADR admitido: proposed | rejected | accepted | deprecated | superseded by ADR-YYY. -->
 
 ## Context and Problem Statement
 
-<!-- La situación real y la tensión, en párrafos. Datos verificables del repo (issues, eventos, PRs), no opinión: qué existe hoy, por qué duele, a quién, y qué crece si no se decide. -->
+<!-- La situación real y la tensión, en párrafos. Datos verificables del repo (issues, eventos, PRs), no opinión: qué existe hoy, por qué duele, a quién, y qué crece si no se decide. Cierra con la Pregunta. -->
 
 **Pregunta:** ¿la pregunta única y concreta que este ADR responde?
 
-<!-- Formato recomendado en los últimos ADRs: el contexto cierra con la Pregunta en negrita. -->
+## Decision Drivers
+
+<!-- Las fuerzas en juego que condicionan la decisión: cualidades deseadas, constraints, preocupaciones. Máximo 5; si hay más, la decisión es demasiado grande. -->
+
+*   Driver 1 — p. ej. "el acceso por red a la frontera es responsabilidad del substrato, no de los inquilinos".
+*   Driver 2 — p. ej. "cero duplicación de lógica entre transportes".
+
+## Considered Options
+
+<!-- TODAS las opciones consideradas, incluida la elegida. Títulos cortos; el detalle de cada una, abajo en Pros and Cons. -->
+
+*   Opción A.
+*   Opción B.
+*   Opción C.
 
 ## Decision Outcome
 
@@ -38,11 +55,26 @@ Accepted (fecha) — familia [ADR-XXX] completada: [ADR-XXX-001] #NN, [ADR-XXX-0
 ### Negative Consequences
 *   **Lead en negrita.** Coste o riesgo asumido, declarado explícitamente.
 
+## Pros and Cons of the Options
+
+<!-- Opcional pero recomendado cuando hubo spike: aquí vive el porqué de las descartadas. Referencia al issue si el análisis ya está allí. -->
+
+### Opción A
+
+*   Good, porque ...
+*   Neutral, porque ...
+*   Bad, porque ...
+
+### Opción B
+
+*   Good, porque ...
+*   Bad, porque ...
+
 ## Post-implementación (fecha)
 
 <!-- Solo tras implementar la familia. Qué aterrizó y cómo difiere del texto de la decisión:
 - Desviaciones registradas sobre el alcance original y por qué se justifican.
-- Evidencia E2E / verificación.
+- Evidencia E2E / verificación (rol MADR "Confirmation": cómo se confirma el cumplimiento).
 - Deuda viva absorbida o caducada, y por quién. -->
 
 ## Related
