@@ -114,14 +114,11 @@ services:
         condition: service_started
       infinity:
         condition: service_healthy ## BUG-005 (#66)
-    # [ADR-008-002] #77: el service despliega en dual — streamable HTTP en
-    # ESTE proceso (0.0.0.0:8000, puerto ya mapeado: la red interna del
-    # compose). STDIO como hasta ahora: cada docker exec de IDE spawnea
-    # su propio proceso (patrón Cline intacto).
-    command: ["python", "-m", "src.main", "--serving", "dual"]
-    # stdin abierto para el lado STDIO del dual: sin EOF el proceso no
-    # termina y el hilo HTTP vive lo que viva el service.
-    stdin_open: true
+    # [ADR-008-002] #77: el service despliega en streamable HTTP —
+    # 0.0.0.0:8000, puerto ya mapeado (la red interna del compose).
+    # STDIO no vive en el service: cada IDE spawnea su propio proceso
+    # con docker exec (patrón Cline intacto).
+    command: ["python", "-m", "src.main", "--serving", "http"]
     networks:
       - coreai_frontend
       - coreai_backend
