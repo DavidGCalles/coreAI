@@ -1,7 +1,7 @@
 # ADR-008: Superficie MCP sobre Streamable HTTP — El Substrato Sirve el Estándar del Protocolo
 
 ## Status
-Proposed — aterrizado al arranque del [ADR-008-001] #76 (28 oct 2026); Proposed→Accepted con el [ADR-008-003] #78.
+Accepted (28 oct 2026) — familia [ADR-008] completada: spike de vía [ADR-008-001] #76, serving en la frontera [ADR-008-002] #77 (PR #81), exposición y verificación [ADR-008-003] #78. STDIO queda como vía interina documentada.
 
 ## Context and Problem Statement
 
@@ -39,15 +39,22 @@ La frontera se sirve sobre **streamable HTTP** (transporte estándar de MCP) en 
 *   ADR-006 (#40) — Contratos de Tarea MCP.
 *   ADR-007 (#48) — Memoria Multimodal.
 
+## Post-implementación (28 oct 2026)
+
+- **Vía aterrizada:** dual-transport con la surface actual — el propio `Server` del SDK (mcp 2.1.1) monta el Starlette (`streamable_http_app()`) sobre la MISMA instancia de `main.py`. FastMCP descartada (validación estricta de parámetros incompatible con el patrón `PassthroughRequest` del post-mortem del ADR-004); ASGI a mano descartado (duplicaba el session manager). Evidencia: [ADR-008-001] #76.
+- **Serving:** `--serving stdio|http|dual` (default `stdio`). El service del compose despliega en `http` directo (0.0.0.0:8000): STDIO no vive en el service — cada IDE sigue spawneando su proceso por `docker exec -i` (patrón Cline intacto, verificado en vivo: los dos servers de Cline en verde).
+- **Desviación registrada sobre el alcance original:** el issue pedía "sin exposición a host/LAN por defecto"; el 8000 queda publicado al host (`8000:8000`) — el host es cliente legítimo: el sistema funciona y eso justifica el cambio, no al revés. El perímetro declarado: red interna del compose + host de desarrollo; la LAN queda sin acceso explícito.
+- **Verificación:** suite de ambos transportes verde (tools/list idéntico; round-trip HTTP initialize → dispatch → poll → search; router estricto). E2E real desde la red interna registrado en #78.
+
 ---
 
 # ISSUES
 
 ### [ADR-008-001] Spike de serving — #76
-En curso (28 oct). Verificación del delta entre la surface v1 de `main.py` (`Server` + `add_request_handler` + `PassthroughRequest` + `stdio_server`) y el serving streamable HTTP del SDK python v2: PoC en `scratch/` (mismo server, las 4 tools con handlers mock) hablado por STDIO y por streamable HTTP con cliente SDK; decisión de vía registrada en el issue con evidencia (tools/list idéntico por ambos transportes); este doc aterriza al repo con su arranque (regla de la casa).
+Completado (28 oct). PoC en `scratch/` con el mismo `Server` hablado por STDIO y por streamable HTTP: tools/list idéntico (4/4) por ambos transportes. Vía decidida con evidencia en el issue: dual-transport con la surface actual (`Server.streamable_http_app()` + uvicorn); FastMCP y ASGI a mano descartadas. Este doc aterrizó al repo con su arranque (regla de la casa).
 
 ### [ADR-008-002] Serving en main.py — #77
-Abierto. La vía elegida por el spike aplicada a la frontera real: mismo server, dos transportes, cero duplicación de lógica de tools. Suite de la casa en ambos transportes (tools/list idéntico; round-trip HTTP initialize → tools/list → dispatch → poll → search) y smoke STDIO con el patrón Cline (`docker exec`) intacto.
+Completado (28 oct, PR #81). `--serving stdio|http|dual` (default `stdio`) sobre la MISMA instancia, cero duplicación de lógica. Suite de ambos transportes verde (tools/list idéntico; round-trip HTTP initialize → tools/list → dispatch → poll → search; router estricto) y smoke STDIO del patrón Cline intacto; el service del compose despliega en `http` directo.
 
 ### [ADR-008-003] Exposición en el compose y E2E real desde la red interna — #78
-Abierto. Servicio en la red interna del compose (puerto único como fuente de verdad — reutilizar el 8000 vestigial o renombrar), E2E HTTP real desde un contenedor de la red (los mismos E2E que hoy corren por STDIO), Cline intacto, y este ADR Proposed→Accepted con la sección Post-implementación.
+Completado (28 oct). El 8000 reutilizado como única fuente de verdad de puertos y publicado al host (cliente legítimo: Cline por streamable HTTP verificado en vivo); E2E real desde un contenedor de la red (`scratch/e2e_http_red_interna.py`, resultado en el issue); Cline intacto (dos servers en verde); este ADR Accepted con Post-implementación.
