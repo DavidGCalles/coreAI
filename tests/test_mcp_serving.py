@@ -8,7 +8,7 @@ sin duplicar registro ni handlers. Estos tests defienden:
 - tools/list IDÉNTICO por ambos transportes: la MISMA instancia de
   `src.main.mcp_server`, hablada por HTTP real (uvicorn en puerto
   efímero) y por la vía STDIO (streams de memoria con el mismo driver
-  `run` del patrún Cline — sin subprocess: el cortafuegos de la conftest
+  `run` del patrón Cline — sin subprocess: el cortafuegos de la conftest
   no viaja en el env saneado de un spawn).
 - Round-trip HTTP completo con los handlers de la frontera mockeados
   (initialize → tools/list → dispatch → poll → search): el objeto bajo
@@ -137,7 +137,7 @@ async def test_tools_list_identico_por_ambos_transportes(http_server_url):
 
 
 # =====================================================================
-# Round-trip HTTP: initialize → tools/list → dispatch ↊ poll → search
+# Round-trip HTTP: initialize → tools/list → dispatch → poll → search
 # =====================================================================
 
 @pytest.mark.asyncio
@@ -145,7 +145,7 @@ async def test_roundtrip_http_dispatch_poll_search(http_server_url):
     """
     El bucle write-then-read completo por la vía HTTP, con los handlers de
     la frontera mockeados: el transporte entrega los argumentos intactos y
-    serializa las respuestas tal cual el patrún Cline recibe hoy.
+    serializa las respuestas tal cual el patrón Cline recibe hoy.
     """
     dispatch_payload = {
         "task_id": TASK_ID,
@@ -168,13 +168,13 @@ async def test_roundtrip_http_dispatch_poll_search(http_server_url):
                 content="memoria del taller",
                 session_id=None,
                 project=None,
-             )
-         ]
+            )
+        ]
     ).model_dump_json(indent=2)
 
     task_handler = AsyncMock(side_effect=[
-         _tool_response(dispatch_payload),
-         _tool_response(poll_payload),
+        _tool_response(dispatch_payload),
+        _tool_response(poll_payload),
     ])
     recall_handler = AsyncMock(return_value=_tool_response(search_payload))
 
@@ -216,7 +216,7 @@ async def test_roundtrip_http_dispatch_poll_search(http_server_url):
         "coreai_search_context", {"query": "memorias del taller"}
     )
 
-    # Y las respuestas legaron serializadas como el patrón Cline espera
+    # Y las respuestas llegaron serializadas como el patrón Cline espera
     assert json.loads(dispatch.content[0].text) == dispatch_payload
     assert json.loads(poll.content[0].text) == poll_payload
     parsed = RecallResponse.model_validate_json(search.content[0].text)

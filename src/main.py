@@ -32,12 +32,12 @@ mcp_server = Server("coreai-mcp")
 
 # Evita el error -32602 del SDK absorbiendo el JSON sin validaciones restrictivas.
 class PassthroughRequest(BaseModel):
-    model_config = ConfigDict(extra='allow)
+    model_config = ConfigDict(extra='allow')
     params: dict[str, Any] | None = None
     name: str | None = None
     arguments: dict[str, Any] | None = None
 
-# El router real delega en el registro diníamico: se enruta por nombre
+# El router real delega en el registro dinámico: se enruta por nombre
 # registrado, no por prefijo hardcodeado — así el router queda estable
 # cuando la lista de herramientas crece (BUG-003, #53: coreai_get_task
 # no comparte prefijo con coreai_dispatch_task). Dos familias, dos
