@@ -76,9 +76,16 @@ async def http_server_url():
     thread.join(timeout=5.0)
 
 
-def _tool_response(payload: dict) -> dict:
-    """Respuesta con la forma cruda que la frontera espera de un handler."""
-    return {"content": [{"type": "text", "text": json.dumps(payload)}], "isError": False}
+def _tool_response(payload: dict | str) -> dict:
+    """Respuesta con la forma cruda que la frontera espera de un handler.
+
+    Un dict se serializa aquí (política de los handlers de tasks); un str
+    pasa tal cual — así contesta el handler de recall, cuyo texto ya viene
+    serializado por el propio modelo. Re-serializarlo envolvería el objeto
+    en un JSON doble y el cliente no podría validarlo.
+    """
+    text = payload if isinstance(payload, str) else json.dumps(payload)
+    return {"content": [{"type": "text", "text": text}], "isError": False}
 
 
 def _is_error(result) -> bool:
