@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import logging
 import sys
@@ -31,12 +32,12 @@ mcp_server = Server("coreai-mcp")
 
 # Evita el error -32602 del SDK absorbiendo el JSON sin validaciones restrictivas.
 class PassthroughRequest(BaseModel):
-    model_config = ConfigDict(extra='allow')
+    model_config = ConfigDict(extra='allow)
     params: dict[str, Any] | None = None
     name: str | None = None
     arguments: dict[str, Any] | None = None
 
-# El router real delega en el registro dinámico: se enruta por nombre
+# El router real delega en el registro diníamico: se enruta por nombre
 # registrado, no por prefijo hardcodeado — así el router queda estable
 # cuando la lista de herramientas crece (BUG-003, #53: coreai_get_task
 # no comparte prefijo con coreai_dispatch_task). Dos familias, dos
@@ -132,9 +133,27 @@ mcp_server.add_request_handler("resources/list", PassthroughRequest, handle_list
 mcp_server.add_request_handler("resources/read", PassthroughRequest, handle_read_resource)
 
 # =====================================================================
-# 3. EL CEREBRO STDIO (Sin red, sin FastAPI)
+# 3. SERVING (ADR-008-002): el mismo server, dos transportes.
+#    STDIO queda intacto como vía interina documentada (patrón IDE/host:
+#    docker exec spawnea este módulo igual que siempre). Streamable HTTP
+#    se sirve sobre la MISMA instancia — el propio Server del SDK monta
+#    el Starlette — sin duplicar registro ni handlers.
 # =====================================================================
-async def main():
+
+def create_initialization_options() -> InitializationOptions:
+    """Opciones de handshake compartidas por todos los transportes."""
+    return InitializationOptions(
+        server_name="coreai-mcp",
+        server_version="1.0.0",
+        capabilities=types.ServerCapabilities(
+            tools=types.ToolsCapability(listChanged=False),
+            resources=types.ResourcesCapability(listChanged=False)
+        )
+    )
+
+
+async def run_stdio() -> None:
+    """El cerebro STDIO de siempre: stdin/stdout secuestrados para el IDE."""
     logger.info("Iniciando CoreAI MCP Server vía STDIO...")
     
     # stdio_server() secuestra stdin/stdout para hablar directamente con el IDE
@@ -142,18 +161,89 @@ async def main():
         await mcp_server.run(
             read_stream,
             write_stream,
-            InitializationOptions(
-                server_name="coreai-mcp",
-                server_version="1.0.0",
-                capabilities=types.ServerCapabilities(
-                    tools=types.ToolsCapability(listChanged=False),
-                    resources=types.ResourcesCapability(listChanged=False)
-                )
-            )
+            create_initialization_options()
         )
+
+
+def _http_app(host: str):
+    """Starlette de streamable HTTP construido por el propio Server del SDK.
+
+    Sesiones stateful (`Mcp-Session-Id`) por defecto, path `/mcp`. El host
+    viaja al app para que la protección DNS-rebinding solo se active en
+    localhost: en la red interna del compose el perímetro ES la propia
+    red — sin auth, decisión explícita del ADR.
+    """
+    return mcp_server.streamable_http_app(host=host)
+
+
+def run_http(host: str, port: int) -> None:
+    """Serving únicamente por streamable HTTP (el modo de despliegue)."""
+    import uvicorn
+
+    logger.info(
+        "Iniciando CoreAI MCP Server vía streamable HTTP en http://%s:%s/mcp ...",
+        host, port
+    )
+    uvicorn.run(_http_app(host), host=host, port=port, log_level="warning")
+
+
+def run_dual(host: str, port: int) -> None:
+    """Una instancia de Server, dos transportes, un proceso.
+
+    HTTP vive en su hilo (uvicorn y el session manager con su propio event
+    loop); el hilo principal sirve STDIO. Cada sesión vive entera en un
+    solo loop, pero el pool de asyncpg es compartido: mezclar USO REAL de
+    base de datos por ambos transportes a la vez puede cruzar loops. El
+    despliegue normal no lo hace — cada transporte en su proceso (el
+    service del compose en modo http; cada docker exec de IDE, su stdio).
+    """
+    import threading
+
+    import uvicorn
+
+    config = uvicorn.Config(_http_app(host), host=host, port=port, log_level="warning")
+    http_server = uvicorn.Server(config)
+    threading.Thread(target=http_server.run, daemon=True, name="coreai-http").start()
+    logger.info(
+        "Modo dual: streamable HTTP en http://%s:%s/mcp (hilo) + STDIO en el proceso principal",
+        host, port
+    )
+    asyncio.run(run_stdio())
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Frontera MCP de coreAI: mismo server, STDIO y streamable HTTP."
+    )
+    parser.add_argument(
+        "--serving",
+        choices=["stdio", "http", "dual"],
+        default="stdio",
+        help="Vía de serving: stdio (default, patrón Cline), http (streamable HTTP), dual (ambos, un proceso).",
+    )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Binding de http/dual (default 0.0.0.0: la red interna del compose).",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Puerto de http/dual (default 8000: una sola fuente de verdad de puertos).",
+    )
+    args = parser.parse_args()
+
+    if args.serving == "http":
+        run_http(args.host, args.port)
+    elif args.serving == "dual":
+        run_dual(args.host, args.port)
+    else:
+        asyncio.run(run_stdio())
+
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        main()
     except KeyboardInterrupt:
         logger.info("Servidor MCP detenido manualmente.")
