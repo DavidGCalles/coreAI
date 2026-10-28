@@ -17,7 +17,7 @@ class MemoryHit(BaseModel):
     point_id: str = Field(..., description="UUID del punto en el vector store.")
     domain: str = Field(..., description="Colección de origen: document, conversation, system o images.")
     score: float = Field(..., description="Similitud por coseno con la consulta.")
-    content: str | None = Field(None, description="Contenido textual del punto (los puntos de imagen no lo llevan).")
+    content: str | None = Field(None, description="Contenido textual del punto si lo lleva: el propio evento en los puntos de texto; la descripción registrada en los de imagen. Ausente si el registro no la trajo.")
     session_id: str | None = Field(None, description="Sesión del evento de imagen (correlación texto↔imagen).")
     project: str | None = Field(None, description="Proyecto del registro, si lo trae el punto.")
 

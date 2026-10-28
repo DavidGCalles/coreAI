@@ -11,6 +11,9 @@ Valida:
   es la única fuente del patrón de URI (placeholder hasta #42).
 - Decodificabilidad de imagen en frontera con Pillow (#61, hallazgo E2E 22
   oct): el stub de 99 bytes rebota SÍNCRONO con diagnóstico.
+- Descripción textual opcional en el contrato de imagen (BUG-009 #84):
+  content legible que persiste en el punto y el recall devuelve; sin él,
+  el payload actual valida idéntico (retrocompatible).
 """
 
 import base64
@@ -137,10 +140,29 @@ class TestRegistryValidateVectorizeImageEvent:
         )
         assert validated == {
             "image": PNG_REAL_DATA_URI,
+            "content": None,
             "project": None,
             "domain": "system",
             "visibility": "private",
         }
+
+    def test_validate_accepts_content(self):
+        """BUG-009 (#84): descripción textual legible opcional — mimetiza el
+        contrato del evento de texto. Qué texto mete y quién lo dice es del
+        edge client del inquilino: aquí solo se transporta."""
+        validated = task_contract_registry.validate(
+            TaskType.VECTORIZE_IMAGE_EVENT,
+            {"image": PNG_REAL_DATA_URI, "content": "Catalepsis de la pieza 7"},
+        )
+        assert validated["content"] == "Catalepsis de la pieza 7"
+
+    def test_validate_rejects_empty_content(self):
+        """Content opcional pero no vacío: "" no es una descripción legible."""
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.VECTORIZE_IMAGE_EVENT,
+                {"image": PNG_REAL_DATA_URI, "content": ""},
+            )
 
     def test_validate_accepts_explicit_project(self):
         """FR-3 (#51): el proyecto viaja en el propio contrato de imagen."""
@@ -385,3 +407,4 @@ class TestContractUri:
         assert contract_uri(TaskType.CONSOLIDATE_MEMORY) == CONTRACT_URI_TEMPLATE.format(
             task_type="consolidate_memory"
         )
+

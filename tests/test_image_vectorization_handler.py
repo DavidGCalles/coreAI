@@ -14,6 +14,9 @@ Valida:
 - El vector aterriza en la colección de imágenes: el punto ES la tarea de
   imagen; la imagen NO se persiste; el payload ancla el vector a su sesión
   y a su proyecto (FR-3 #51, en el propio evento).
+- Descripción textual (BUG-009 #84): el content opcional del contrato viaja
+  TAL CUAL al payload del punto — presente si se registró, None si no
+  (retrocompatible).
 - Telemetría simétrica con el flujo textual: factura de tokens en llm_audit.
 - Fallos legítimos: gateway caído (rollback + re-raise), embedding vacío,
   corrupción de cola (sin extracción tolerante — ADR-006).
@@ -184,7 +187,38 @@ async def test_project_defaults_to_none(mock_llm_client_class, mock_get_qdrant):
 
     point = qdrant_mock.upsert.call_args.kwargs["points"][0]
     assert point.payload["project"] is None
+    assert point.payload["content"] is None  # sin content registrado: comportamiento actual intacto
     assert point.payload["session_id"] == str(SESSION_ID)
+
+
+@pytest.mark.asyncio
+@patch("src.workers.task_router.get_qdrant_client", new_callable=AsyncMock)
+@patch("src.workers.task_router.LLMClient")
+async def test_content_lands_in_point_payload(mock_llm_client_class, mock_get_qdrant):
+    """
+    BUG-009 (#84): la descripción textual del contrato viaja TAL CUAL al
+    payload del punto. El hit del recall deja de ser un puntero opaco:
+    quien registra con descripción la recibe de vuelta. Cero estado de
+    sesión en el cliente — un solo evento, un solo punto, un solo dispatch.
+    """
+    session_mock = _session_mock(_session_result(_db_session()))
+    task = _image_task(content="Llave allen de 14 mm marcada en el mango")
+
+    qdrant_mock = AsyncMock()
+    mock_get_qdrant.return_value = qdrant_mock
+    llm_instance = AsyncMock()
+    llm_instance.generate_embedding.return_value = _gateway_response()
+    mock_llm_client_class.return_value = llm_instance
+
+    await handle_vectorize_image_event(task, session_mock)
+
+    point = qdrant_mock.upsert.call_args.kwargs["points"][0]
+    assert point.payload["content"] == "Llave allen de 14 mm marcada en el mango"
+    # La descripción NO se embebe ni sustituye a la imagen: el vector sigue
+    # siendo el de la imagen (un solo punto, el mismo circuito)
+    llm_instance.generate_embedding.assert_awaited_once()
+    request = llm_instance.generate_embedding.call_args[0][0]
+    assert request.modality == "image"
 
 
 # =====================================================================
@@ -292,3 +326,4 @@ async def test_upsert_image_targets_the_image_collection():
     kwargs = client.upsert.call_args.kwargs
     assert kwargs["collection_name"] == IMAGE_COLLECTION == "images"
     assert kwargs["points"][0].id == str(point_id)
+

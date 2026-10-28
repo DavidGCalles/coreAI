@@ -263,6 +263,38 @@ async def test_recall_image_happy_path():
 
 
 @pytest.mark.asyncio
+async def test_recall_image_hit_devuelve_content_registrado():
+    """
+    BUG-009 (#84): asimetría de contenido cerrada. Un punto de imagen
+    registrado CON descripción la devuelve en el content del hit — el hit
+    responde 'qué es esto', no es un puntero opaco. Sin descripción en el
+    punto, content=None (comportamiento actual intacto, retrocompatible).
+    """
+    vector_repo = AsyncMock()
+    vector_repo.collection_names.return_value = {"images"}
+    vector_repo.search.return_value = [
+        _scored_point(IMG_POINT_ID, 0.71, {
+            "session_id": "sesion-1",
+            "project": "elios-workshop",
+            "content": "Llave allen de 14 mm marcada en el mango",
+        }),
+        _scored_point(uuid.uuid4(), 0.63, {"session_id": "sesion-2"}),
+    ]
+    manager, session, audit_repo, llm = _manager(vector_repo, _embedding_response())
+
+    hits = await manager.recall_image(
+        image_data_uri=VALID_IMAGE_DATA_URI,
+        top_k=5,
+        score_threshold=0.5,
+    )
+
+    assert len(hits) == 2
+    assert hits[0].content == "Llave allen de 14 mm marcada en el mango"
+    assert hits[1].content is None  # punto sin descripción: None, no inventado
+    _assert_dif_cero(session, audit_repo, vector_repo)
+
+
+@pytest.mark.asyncio
 async def test_recall_image_no_match_honesto():
     """Nada sobre el umbral de visión = lista vacía. Sin inventar matches."""
     vector_repo = AsyncMock()
@@ -457,3 +489,4 @@ def test_dod_tools_list_exacta():
         "coreai_search_context",
         "coreai_search_image",
     }
+

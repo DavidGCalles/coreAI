@@ -204,6 +204,13 @@ async def handle_vectorize_image_event(task: Task, session: AsyncSession) -> Non
     imágenes (dim 1024 jina-clip-v2, espacio propio — init idempotente del
     #50) y la imagen en sí NO se persiste: el vector es dato derivado del
     propio evento.
+
+    Descripción textual legible (BUG-009 #84): el contrato admite un
+    `content` opcional que persiste TAL CUAL en el payload del punto —
+    cero estado de sesión en el cliente, quien registra con descripción
+    la recibe de vuelta en el hit del recall. No se embebe ni crea punto
+    de texto: es la misma simetría de contenido que ya llevan los puntos
+    de texto (el sustrato no piensa la descripción, la transporta).
     """
     logger.info("  [Worker] Vectorizando imagen para la tarea %s", task.id)
 
@@ -237,16 +244,17 @@ async def handle_vectorize_image_event(task: Task, session: AsyncSession) -> Non
     # alternativas: una clave ausente solo puede ser corrupción de cola.
     try:
         image_data_uri = payload["image"]
+        content = payload.get("content")
         project = payload.get("project")
         domain = DomainType(str(payload.get("domain", DomainType.SYSTEM.value)).lower())
         visibility = Visibility(str(payload.get("visibility", Visibility.PRIVATE.value)).lower())
     except (KeyError, ValueError, TypeError) as contract_error:
         raise ValueError(
             f"El payload de la tarea {task.id} no cumple el contrato "
-            f"vectorize_image_event (image como data URI base64 + project "
-            f"opcional + domain + visibility). La frontera ya valida y "
-            f"normaliza la forma en el dispatch: esto solo puede ser "
-            f"corrupción de cola. Detalle: {contract_error}"
+            f"vectorize_image_event (image como data URI base64 + content "
+            f"opcional + project opcional + domain + visibility). La frontera "
+            f"ya valida y normaliza la forma en el dispatch: esto solo puede "
+            f"ser corrupción de cola. Detalle: {contract_error}"
         ) from contract_error
 
     # =================================================================
@@ -300,11 +308,15 @@ async def handle_vectorize_image_event(task: Task, session: AsyncSession) -> Non
         # vector a su sesión (la correlación texto↔imagen ES la sesión) y
         # al proyecto (FR-3 #51: dato del inquilino en el propio evento).
         # La imagen NO viaja en el payload: el vector es dato derivado.
+        # El content (BUG-009 #84) sí viaja TAL CUAL: clave plana legible,
+        # simétrica con los puntos de texto — el recall la mapea al hit
+        # (presente si se registró, None si no: retrocompatible).
         point_payload = {
             "tenant_id": str(entity_id),
             "session_id": str(task.session_id),
             "domain": domain.value,
             "visibility": visibility.value,
+            "content": content,
             "project": project,
         }
         await vector_repo.upsert_image(
@@ -352,8 +364,8 @@ async def handle_consolidate_memory(task: Task, session: AsyncSession) -> None:
     la memoria consolidada en el grafo híbrido.
 
     Limitación conocida de la v1 (BUG-006 #69): la agrupación es puramente
-    temporal — una ventana heterogénea fusiona recuerdos sin relación en
-    un mismo resumen (contaminación semántica permanente: el resumen queda
+    temporal — una ventana heterogénea fusiona recuerdos sin relación en un
+    mismo resumen (contaminación semántica permanente: el resumen queda
     embebido y se sirve en cada recall futuro). Evolución por temática
     (selección semántica) en el BUG-006 #69.
     """
