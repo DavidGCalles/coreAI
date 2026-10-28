@@ -21,7 +21,6 @@ sin duplicar registro ni handlers. Estos tests defienden:
 import json
 import threading
 import time
-import uuid
 from unittest.mock import AsyncMock, patch
 
 import anyio
@@ -162,7 +161,7 @@ async def test_roundtrip_http_dispatch_poll_search(http_server_url):
     search_payload = RecallResponse(
         hits=[
             MemoryHit(
-                point_id=uuid.UUID("33333333-3333-3333-3333-333333333333"),
+                point_id="33333333-3333-3333-3333-333333333333",
                 domain="system",
                 score=0.9,
                 content="memoria del taller",
