@@ -114,7 +114,11 @@ services:
         condition: service_started
       infinity:
         condition: service_healthy ## BUG-005 (#66)
-    command: ["tail", "-f", "/dev/null"]
+    # [ADR-008-002] #77: el service despliega en streamable HTTP —
+    # 0.0.0.0:8000, puerto ya mapeado (la red interna del compose).
+    # STDIO no vive en el service: cada IDE spawnea su propio proceso
+    # con docker exec (patrón Cline intacto).
+    command: ["python", "-m", "src.main", "--serving", "http"]
     networks:
       - coreai_frontend
       - coreai_backend
