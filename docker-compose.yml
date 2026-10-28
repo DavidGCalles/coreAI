@@ -100,6 +100,8 @@ services:
       dockerfile: Dockerfile
     container_name: coreai_mcp
     ports:
+      # [ADR-008-003] #78: el host es cliente legítimo (Cline por streamable
+      # HTTP, verificado 28 oct) — publicación a host; LAN sin acceso explícito.
       - "8000:8000"
     volumes:
       - ./src:/app/src
@@ -114,7 +116,11 @@ services:
         condition: service_started
       infinity:
         condition: service_healthy ## BUG-005 (#66)
-    command: ["tail", "-f", "/dev/null"]
+    # [ADR-008-002] #77: el service despliega en streamable HTTP —
+    # 0.0.0.0:8000, puerto ya mapeado (la red interna del compose).
+    # STDIO no vive en el service: cada IDE spawnea su propio proceso
+    # con docker exec (patrón Cline intacto).
+    command: ["python", "-m", "src.main", "--serving", "http"]
     networks:
       - coreai_frontend
       - coreai_backend
