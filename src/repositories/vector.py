@@ -29,6 +29,17 @@ IMAGE_VECTOR_DISTANCE = models.Distance.COSINE
 TEXT_VECTOR_SIZE = 384
 TEXT_VECTOR_DISTANCE = models.Distance.COSINE
 
+# =====================================================================
+# TOPOLOGÍA REGISTRADA DEL SISTEMA (ADR-009, #89)
+# =====================================================================
+# Una colección por dominio de texto (BUG-001 #34) más la de imágenes
+# (ADR-007-002 #50): el universo donde vive todo punto despachable, y la
+# topología garantizada al arranque del worker. El evento de corrección la
+# recorre para localizar un point_id por UUID — la topología es del
+# substrato, no del inquilino: quien corrige aporta el dato (su point_id),
+# no la plomería (dónde vive).
+REGISTERED_COLLECTIONS = [domain.value for domain in DomainType] + [IMAGE_COLLECTION]
+
 
 class VectorRepository:
     """
@@ -218,6 +229,53 @@ class VectorRepository:
             vector=vector,
             payload=payload,
         )
+
+    async def locate_point(self, point_id: str) -> "tuple[str, dict[str, Any]] | None":
+        """
+        Localiza un punto por UUID en las colecciones registradas del
+        sistema (ADR-009, #89): recorre la topología garantizada al
+        arranque y devuelve la primera colección que contiene el punto,
+        junto a su payload. El repositorio no inventa política: un punto
+        ausente de TODAS es None — la clase del fallo (explícito, jamás
+        silencio) la decide el llamador.
+        """
+        for collection in REGISTERED_COLLECTIONS:
+            points = await self.client.retrieve(
+                collection_name=collection,
+                ids=[point_id],
+                with_payload=True,
+                with_vectors=False,
+            )
+            if points:
+                return collection, dict(points[0].payload or {})
+        return None
+
+    async def amend_payload(
+        self,
+        collection_name: str,
+        point_id: str,
+        fields: dict[str, Any],
+    ) -> None:
+        """
+        Mutación quirúrgica de claves planas del payload por point ID
+        (ADR-009, #89): set_payload SIN tocar el vector — corregir
+        metadata no cuesta re-embedding, el vector existente sigue
+        válido. Idempotente por construcción: el mismo set converge
+        siempre al mismo payload, y un re-dispatch no duplica nada.
+        """
+        try:
+            await self.client.set_payload(
+                collection_name=collection_name,
+                payload=fields,
+                points=[point_id],
+                wait=True,
+            )
+        except Exception as e:
+            logger.error(
+                "Fallo estructural al corregir el payload del punto %s en '%s': %s",
+                point_id, collection_name, e,
+            )
+            raise
 
     async def search(
         self,

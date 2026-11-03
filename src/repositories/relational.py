@@ -132,6 +132,39 @@ class TaskRepository(BaseRepository[Task]):
         await self.session.execute(stmt)
         await self.session.commit()
 
+    async def set_payload_fields(self, task_id: UUID, fields: dict[str, Any]) -> bool:
+        """
+        Actualiza claves del JSONB payload de una task, atómicamente y por
+        UUID, sin instancias ORM (misma forma que fail_task).
+
+        Es la simetría relacional del evento de corrección de memoria
+        (ADR-009, #89): en los puntos de imagen la task original ES el
+        registro relacional del punto y su JSONB lleva el campo corregido;
+        y es la pluma de la traza del propio evento de corrección
+        (colección localizada + valor previo), append-only: los registros
+        origen nunca se reescriben.
+
+        NO comitea: la transacción pertenece al llamador. Devuelve False
+        si la fila no existe o su payload no es un objeto JSON (corrupción).
+        """
+        result = await self.session.execute(
+            select(Task.payload).where(Task.id == task_id)
+        )
+        current_payload = result.scalar_one_or_none()
+
+        if not isinstance(current_payload, dict):
+            return False
+
+        payload_copy = dict(current_payload)
+        payload_copy.update(fields)
+        stmt = (
+            update(Task)
+            .where(Task.id == task_id)
+            .values({Task.payload: payload_copy})
+        )
+        await self.session.execute(stmt)
+        return True
+
 class EventRepository(BaseRepository[Event]):
     def __init__(self, session: AsyncSession):
         super().__init__(Event, session)
