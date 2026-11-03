@@ -6,6 +6,7 @@ payload por TaskType. Ver ADR-006 (docs/adr/006-mcp-contracts.md).
 """
 
 from src.contracts.registry import (
+    AmendMemoryPointPayload,
     CONTRACT_URI_TEMPLATE,
     ConsolidateMemoryPayload,
     ContractNotRegisteredError,
@@ -18,6 +19,7 @@ from src.contracts.registry import (
 )
 
 __all__ = [
+    "AmendMemoryPointPayload",
     "CONTRACT_URI_TEMPLATE",
     "ConsolidateMemoryPayload",
     "ContractNotRegisteredError",
