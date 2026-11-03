@@ -132,6 +132,7 @@ scripts/         # prepare_model (+ prepare_clip_kit), schedulers/crontab
 | [006](docs/adr/006-mcp-contracts.md) | Contratos de Tarea MCP — validación síncrona en la frontera y exposición como resources (✅ implementado, 23 oct) |
 | [007](docs/adr/007-multimodal-memory.md) | Memoria Multimodal — adopción anticipada y acotada (identificación visual, demo ELIOS) (✅ implementado, 23 oct) |
 | [008](docs/adr/008-mcp-streamable-http.md) | Superficie MCP sobre Streamable HTTP — el mismo server sirve STDIO y streamable HTTP; service del compose en http (✅ implementado, 28 oct) |
+| [009](docs/adr/009-memory-correction-surface.md) | Superficie de Corrección de la Memoria — el ciclo de vida de lo ya almacenado es del substrato: corrección de metadata por evento, sin re-embedding (🚧 implementación en curso, #89) |
 
 ## Estado del proyecto
 
