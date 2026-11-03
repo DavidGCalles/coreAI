@@ -1,7 +1,7 @@
 # ADR-009: Superficie de Corrección de la Memoria — El Ciclo de Vida de lo Ya Almacenado es del Substrato
 
 ## Status
-Proposed (1 nov 2026) — familia de un solo issue: [ADR-009-001] #89 (contrato, handler y verificación end-to-end). El flip a Accepted con Post-implementación llega con el cierre de #89.
+Accepted (3 nov 2026) — [ADR-009-001] #89 implementado (PR #90): contrato `amend_memory_point`, handler dual-store y E2E de punta a punta en verde. Las dos decisiones abiertas del ADR quedan cerradas con evidencia en la Post-implementación. Proposed 1 nov 2026.
 
 ## Context and Problem Statement
 
@@ -86,9 +86,16 @@ Decisiones no cerradas todavía (se cierran con evidencia en la implementación 
 *   ADR-007 (#48) — Memoria Multimodal.
 *   BUG-006 (#69) — Consolidación por temática.
 
+## Post-implementación (3 nov 2026)
+
+- **Contrato aterrizado:** task type `amend_memory_point` con `AmendMemoryPointPayload` (`point_id` + `project`, `extra=forbid`) registrado en el registry — al registrarse es despachable por la frontera y se publica como resource (ADR-006) sin tocar la superficie MCP (4 tools intactas) ni `route_task`.
+- **Decisión cerrada — estrategia transaccional dual-store:** Qdrant primero (`set_payload` por point ID, `wait=True`), Postgres después, **cero compensación activa**. Ambas escrituras son sets idempotentes: un fallo a mitad deja FAILED honesto con `error_trace` y el re-dispatch converge al valor objetivo. La asimetría del esquema dicta la simetría relacional: en texto, `project` solo vive en el payload de Qdrant (`Event` no lo lleva) → la traza relacional de la corrección es la task row del amend (`amended_collection` + `old_project`, append-only); en imagen, la task original lleva el payload en JSONB (ADR-007-003) → espejo simétrico por UUID (`TaskRepository.set_payload_fields`). La colección se auto-resuelve (`locate_point` sobre las colecciones registradas): la topología es del substrato, no del contrato.
+- **Decisión cerrada — fallo por punto inexistente:** `MemoryPointNotFoundError`, veneno determinista no-reintentable — FAILED explícito con `error_trace`, jamás un no-op COMPLETED. Un no-op escondería point_ids mal copiados o puntos absorbidos por consolidación detrás de un éxito aparente.
+- **Verificación:** suite del contrato y del handler (mock-based, sin BD) y E2E de punta a punta en verde en la VM de desarrollo (3 nov): seed mal registrado → dispatch de corrección → poll → el recall por el `project` corregido devuelve EL MISMO punto (el `project` erróneo ya no lo sirve: re-orientado, no duplicado) → punto inexistente = FAILED `MemoryPointNotFoundError`.
+
 ---
 
 # ISSUES
 
 ### [ADR-009-001] Evento de corrección de memoria — contrato, handler y verificación end-to-end — #89
-En curso (3 nov 2026). Task type `amend_memory_point` con contrato cerrado (`point_id` + `project`), handler aplicando la mutación dual-store (`set_payload` en Qdrant + simetría relacional) sin re-embedding, suite del contrato y del handler, y E2E de punta a punta (seed mal registrado → dispatch de corrección → poll → recall filtrando por el `project` corregido). Las dos decisiones abiertas del ADR — estrategia transaccional dual-store y clase del fallo por punto inexistente — se cierran con evidencia en el issue y se registran aquí, en la Post-implementación.
+Completado (3 nov, PR #90). Task type `amend_memory_point` con contrato cerrado (`point_id` + `project`), handler aplicando la mutación dual-store (`set_payload` en Qdrant + simetría relacional) sin re-embedding, suite del contrato y del handler, y E2E de punta a punta en verde (seed mal registrado → dispatch de corrección → poll → recall filtrando por el `project` corregido). Las dos decisiones abiertas del ADR — estrategia transaccional dual-store y clase del fallo por punto inexistente — cerradas con evidencia en el issue y registradas aquí, en la Post-implementación.
