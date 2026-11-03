@@ -26,6 +26,7 @@ from PIL import Image
 from src.schemas.tasks import TaskType
 from src.contracts import (
     task_contract_registry,
+    AmendMemoryPointPayload,
     ContractNotRegisteredError,
     CONTRACT_URI_TEMPLATE,
     ConsolidateMemoryPayload,
@@ -240,6 +241,71 @@ class TestRegistryValidateVectorizeImageEvent:
             )
 
 
+class TestRegistryValidateAmendMemoryPoint:
+    """validate() acepta/rechaza el contrato de amend_memory_point (ADR-009, #89).
+
+    Corrección de metadata de un punto YA almacenado: point_id (UUID tal
+    como lo expone el hit del recall) + project corregido. Sin re-embedding,
+    idempotente por diseño, punto inexistente = fallo explícito.
+    """
+
+    PUNTO = "7c60755c-02a3-4158-b8e4-6600b7650c17"
+
+    def test_validate_accepts_canonical_payload(self):
+        validated = task_contract_registry.validate(
+            TaskType.AMEND_MEMORY_POINT,
+            {"point_id": self.PUNTO, "project": "elios-workshop"},
+        )
+        assert validated == {"point_id": self.PUNTO, "project": "elios-workshop"}
+
+    def test_validate_normalizes_point_id_to_string(self):
+        """El loader normaliza el UUID a su forma canónica en string: el
+        motor (y el JSONB) solo reciben payloads canónicos."""
+        validated = task_contract_registry.validate(
+            TaskType.AMEND_MEMORY_POINT,
+            {"point_id": self.PUNTO.upper(), "project": "elios-workshop"},
+        )
+        assert validated["point_id"] == self.PUNTO
+        assert isinstance(validated["point_id"], str)
+
+    def test_validate_rejects_missing_point_id(self):
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.AMEND_MEMORY_POINT, {"project": "elios-workshop"}
+            )
+
+    def test_validate_rejects_missing_project(self):
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.AMEND_MEMORY_POINT, {"point_id": self.PUNTO}
+            )
+
+    def test_validate_rejects_non_uuid_point_id(self):
+        """El point_id viene del hit del recall: un UUID fantasma rebota
+        en la frontera, no muere asíncrono en el worker."""
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.AMEND_MEMORY_POINT,
+                {"point_id": "no-es-un-uuid", "project": "elios-workshop"},
+            )
+
+    def test_validate_rejects_empty_project(self):
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.AMEND_MEMORY_POINT,
+                {"point_id": self.PUNTO, "project": ""},
+            )
+
+    def test_validate_rejects_extra_keys(self):
+        """Clave fantasma: la corrección v1 corrige SOLO project — más
+        campos son cambio local posterior, no payload liberal."""
+        with pytest.raises(ValidationError):
+            task_contract_registry.validate(
+                TaskType.AMEND_MEMORY_POINT,
+                {"point_id": self.PUNTO, "project": "x", "content": "fantasma"},
+            )
+
+
 class TestFrontierValidaDecodificabilidad:
     """Decodificabilidad de imagen en frontera con Pillow (#61, hallazgo E2E 22 oct).
 
@@ -326,6 +392,7 @@ class TestRegistrySchemaAndList:
         assert task_contract_registry.schema(TaskType.VECTORIZE_EVENT) == VectorizeEventPayload.model_json_schema()
         assert task_contract_registry.schema(TaskType.CONSOLIDATE_MEMORY) == ConsolidateMemoryPayload.model_json_schema()
         assert task_contract_registry.schema(TaskType.VECTORIZE_IMAGE_EVENT) == VectorizeImageEventPayload.model_json_schema()
+        assert task_contract_registry.schema(TaskType.AMEND_MEMORY_POINT) == AmendMemoryPointPayload.model_json_schema()
 
     def test_list_returns_only_contracted_catalog(self):
         """Solo los tipos con lógica real; los stubs no son despachables."""
@@ -333,6 +400,7 @@ class TestRegistrySchemaAndList:
             "vectorize_event",
             "consolidate_memory",
             "vectorize_image_event",
+            "amend_memory_point",
         }
 
     def test_schema_of_unregistered_type_raises(self):
@@ -371,6 +439,7 @@ class TestDispatchFrontierContracts:
         assert task_contract_registry.has_contract(TaskType.VECTORIZE_EVENT)
         assert task_contract_registry.has_contract(TaskType.CONSOLIDATE_MEMORY)
         assert task_contract_registry.has_contract(TaskType.VECTORIZE_IMAGE_EVENT)
+        assert task_contract_registry.has_contract(TaskType.AMEND_MEMORY_POINT)
 
 
 class TestContractLoader:

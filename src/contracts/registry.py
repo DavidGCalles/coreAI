@@ -12,6 +12,7 @@ import base64
 import binascii
 import inspect
 import io
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Any
@@ -198,6 +199,31 @@ class VectorizeImageEventPayload(TaskPayloadContract):
         return value
 
 
+class AmendMemoryPointPayload(TaskPayloadContract):
+    """Contrato de `amend_memory_point`: corrige metadata de un punto YA almacenado (v1: `project`) sin re-embedding — el contenido vectorizado no cambia y el vector existente sigue válido. La corrección es un evento del ciclo de vida: re-orienta lo almacenado, no lo reescribe (quien necesita otro contenido re-ingesta; quien quiere borrar, no puede — la corrección no destruye). El `point_id` es el UUID tal como lo expone el hit del recall; el punto se localiza en las colecciones registradas del sistema, transversal a texto e imagen. Idempotente por diseño: re-dispatch de la misma corrección converge al valor objetivo. Un point_id inexistente falla de forma explícita — jamás silencio."""
+
+    point_id: UUID = Field(
+        ...,
+        description=(
+            "UUID del punto a corregir, tal como lo devolvió el recall "
+            "(clave point_id del hit). El punto debe existir en alguna "
+            "colección registrada: la corrección re-orienta lo ya "
+            "almacenado, no fabrica puntos."
+        ),
+    )
+    project: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Valor corregido del proyecto del punto. Sobrescribe — o fija "
+            "por primera vez — la clave plana 'project' del payload del "
+            "punto: la orientación bajo la que el recall lo devolverá. "
+            "Obligatorio y no vacío: corregir a '' es re-ingesta u otro "
+            "campo, no este evento."
+        ),
+    )
+
+
 class TaskContractRegistry:
     """Fuente única de verdad de los contratos de tarea."""
 
@@ -268,3 +294,4 @@ task_contract_registry = TaskContractRegistry()
 task_contract_registry.register(TaskType.VECTORIZE_EVENT, VectorizeEventPayload)
 task_contract_registry.register(TaskType.CONSOLIDATE_MEMORY, ConsolidateMemoryPayload)
 task_contract_registry.register(TaskType.VECTORIZE_IMAGE_EVENT, VectorizeImageEventPayload)
+task_contract_registry.register(TaskType.AMEND_MEMORY_POINT, AmendMemoryPointPayload)

@@ -25,6 +25,7 @@ from src.contracts import (
     ConsolidateMemoryPayload,
     VectorizeEventPayload,
     VectorizeImageEventPayload,
+    AmendMemoryPointPayload,
     contract_uri,
     task_contract_registry,
 )
@@ -40,6 +41,7 @@ MODEL_BY_TYPE = {
     "vectorize_event": VectorizeEventPayload,
     "consolidate_memory": ConsolidateMemoryPayload,
     "vectorize_image_event": VectorizeImageEventPayload,
+    "amend_memory_point": AmendMemoryPointPayload,
 }
 
 

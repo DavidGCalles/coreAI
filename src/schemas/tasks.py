@@ -13,6 +13,7 @@ class TaskType(StrEnum):
     VECTORIZE_EVENT = "vectorize_event"
     CONSOLIDATE_MEMORY = "consolidate_memory"
     VECTORIZE_IMAGE_EVENT = "vectorize_image_event"
+    AMEND_MEMORY_POINT = "amend_memory_point"
 
 class TaskDispatchRequest(BaseModel):
     """

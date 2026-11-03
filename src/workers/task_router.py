@@ -20,8 +20,8 @@ from src.managers.memory_manager import HybridMemoryManager
 from src.db.models import DomainType, Visibility
 
 import uuid
-from src.repositories.relational import EventRepository, LLMAuditRepository, SessionRepository
-from src.repositories.vector import VectorRepository
+from src.repositories.relational import EventRepository, LLMAuditRepository, SessionRepository, TaskRepository
+from src.repositories.vector import IMAGE_COLLECTION, VectorRepository
 from src.managers.memory_manager import HybridMemoryManager
 from src.managers.llm_client import LLMClient
 
@@ -442,6 +442,173 @@ async def handle_consolidate_memory(task: Task, session: AsyncSession) -> None:
         raise
 
 # =====================================================================
+# HANDLER DE CORRECCIÓN DE METADATA DE MEMORIA (ADR-009, #89)
+# =====================================================================
+
+class MemoryPointNotFoundError(Exception):
+    """
+    El point_id referenciado por un evento de corrección no existe en
+    ninguna colección registrada (ADR-009, #89).
+
+    Fallo explícito, jamás silencio (decisión B del ADR-009): un no-op
+    COMPLETED escondería bugs del cliente — point_id mal copiado, punto
+    absorbido por consolidación — detrás de un éxito aparente. Clase
+    propia y determinista, la que el futuro DLQ (#30) podrá clasificar
+    como veneno no-reintentable: la corrección re-orienta lo almacenado,
+    no fabrica puntos.
+    """
+
+
+async def handle_amend_memory_point(task: Task, session: AsyncSession) -> None:
+    """
+    Manejador del evento de corrección de metadata de un punto ya
+    almacenado (ADR-009, #89): v1 corrige `project` por point_id, SIN
+    re-embedding — el contenido vectorizado no cambia y el vector
+    existente sigue válido.
+
+    Estrategia dual-store (decisión A del ADR-009, cerrada con evidencia
+    del esquema): Qdrant primero, Postgres después, cero compensación
+    activa.
+
+    - El `project` (FR-3) vive como clave plana del payload del punto en
+      Qdrant — su única morada operativa, la que consume el recall. La
+      fuente relacional de los puntos de TEXTO (events) no almacena
+      project (cero migración por diseño): en texto la simetría la da el
+      propio evento de corrección — esta task row con point_id y valor
+      objetivo ES la traza relacional, y el Event original queda intacto
+      (log append-only).
+    - En IMAGEN el registro relacional del punto ES la task original
+      (ADR-007-003: los tasks ya son eventos) y su JSONB sí lleva
+      project: ahí aplica la actualización simétrica, atómica por UUID.
+    - Ambas escrituras son sets idempotentes: un fallo a mitad (p. ej.
+      Postgres tras el set_payload) deja la tarea FAILED con error_trace
+      honesto y el re-dispatch converge — no se compensa nada activamente.
+
+    Punto inexistente (decisión B): MemoryPointNotFoundError — veneno
+    determinista no-reintentable, jamás un no-op silencioso.
+
+    La identidad multi-tenant queda diferida como en el recall: el
+    payload del punto conserva su tenant_id; el aislamiento por
+    inquilino es su propia pieza de diseño.
+    """
+    # Máscara greenlet (lección #61): el rollback expira la instancia
+    # task y task.* revienta con MissingGreenlet reemplazando al error
+    # real. El id se captura ANTES de cualquier await.
+    task_id = task.id
+    logger.info("  [Worker] Corrigiendo metadata de punto para la tarea %s", task_id)
+
+    payload = task.payload
+
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"Payload corrupto para la tarea {task_id}: no es un objeto JSON."
+        )
+
+    # =================================================================
+    # FASE 1: Extracción Estricta (sin extracción tolerante — ADR-006)
+    # =================================================================
+    # La frontera ya validó y normalizó el payload contra el contrato
+    # (AmendMemoryPointPayload) en el dispatch. Aquí NO se buscan claves
+    # alternativas: una clave ausente solo puede ser corrupción de cola.
+    try:
+        point_id = payload["point_id"]
+        nuevo_project = payload["project"]
+    except (KeyError, TypeError) as contract_error:
+        raise ValueError(
+            f"El payload de la tarea {task_id} no cumple el contrato "
+            f"amend_memory_point (point_id + project). La frontera ya "
+            f"valida y normaliza la forma en el dispatch: esto solo puede "
+            f"ser corrupción de cola. Detalle: {contract_error}"
+        ) from contract_error
+
+    # =================================================================
+    # FASE 2: Inyección de Dependencias
+    # =================================================================
+    try:
+        qdrant_client = await get_qdrant_client()
+        vector_repo = VectorRepository(client=qdrant_client)
+        task_repo = TaskRepository(session)
+
+        # =================================================================
+        # FASE 3: Localización del punto (auto-resolución en las
+        # colecciones registradas — la topología es del substrato)
+        # =================================================================
+        localizado = await vector_repo.locate_point(str(point_id))
+
+        if localizado is None:
+            # Decisión B del ADR-009: fallo explícito, jamás silencio. El
+            # punto pudo ser absorbido por consolidación o el point_id mal
+            # copiado del hit — cualquiera de los dos se oye, no se entierra.
+            raise MemoryPointNotFoundError(
+                f"El point_id '{point_id}' no existe en ninguna colección "
+                f"registrada del vector store. La corrección re-orienta lo "
+                f"almacenado, no fabrica puntos: verifica el point_id contra "
+                f"el hit del recall, o re-ingesta el registro si debe existir."
+            )
+
+        collection, point_payload = localizado
+        old_project = point_payload.get("project")
+
+        # =================================================================
+        # FASE 4: set_payload en Qdrant (el read path del recall) —
+        # set idempotente, sin tocar el vector
+        # =================================================================
+        await vector_repo.amend_payload(
+            collection_name=collection,
+            point_id=str(point_id),
+            fields={"project": nuevo_project},
+        )
+
+        # =================================================================
+        # FASE 5: Simetría relacional + traza audible del ciclo de vida
+        # =================================================================
+        # En imagen, el registro relacional del punto (la task original)
+        # sí almacena project: actualización simétrica atómica por UUID.
+        if collection == IMAGE_COLLECTION:
+            espejo = await task_repo.set_payload_fields(
+                uuid.UUID(str(point_id)), {"project": nuevo_project}
+            )
+            if not espejo:
+                raise MemoryPointNotFoundError(
+                    f"El punto '{point_id}' vive en '{IMAGE_COLLECTION}' pero "
+                    f"su registro relacional (la task original) no existe en "
+                    f"Postgres: inconsistencia dual-store — revisar manualmente."
+                )
+
+        # El propio evento de corrección queda como traza audible: colección
+        # donde vive el punto y valor previo, en su task row (append-only: los
+        # registros origen no se reescriben). Sin commit: la transacción
+        # pertenece al ciclo del worker (complete_task asienta).
+        await task_repo.set_payload_fields(
+            task_id,
+            {"amended_collection": collection, "old_project": old_project},
+        )
+
+        logger.info(
+            "  [Worker] Corrección completada para la tarea %s: punto %s en "
+            "colección '%s', project %r → %r",
+            task_id, point_id, collection, old_project, nuevo_project,
+        )
+
+    except (ValueError, MemoryPointNotFoundError):
+        # Fallos de negocio explícitos: suben tal cual al fail_task del
+        # worker (trace honesto {Clase}: {mensaje}). El cortafuegos de
+        # rollback es para los fallos de EJECUCIÓN, no para estos.
+        raise
+    except Exception as execution_error:
+        # Cortafuegos (patrón del handler de imagen): fallo a mitad de la
+        # mutación dual-store → rollback de lo relacional pendiente y
+        # re-raise. El set de Qdrant NO se compensa: es idempotente y el
+        # re-dispatch converge (estrategia registrada en el ADR-009).
+        await session.rollback()
+        logger.error(
+            "  [Worker] Error de ejecución en corrección de memoria (Task %s): %s",
+            task_id,
+            execution_error,
+        )
+        raise
+
+# =====================================================================
 # REGISTRO CENTRAL (Diccionario TASK_REGISTRY)
 # =====================================================================
 
@@ -453,6 +620,7 @@ TASK_REGISTRY: Dict[TaskType, Any] = {
     TaskType.VECTORIZE_EVENT: handle_vectorize_event,
     TaskType.CONSOLIDATE_MEMORY: handle_consolidate_memory,
     TaskType.VECTORIZE_IMAGE_EVENT: handle_vectorize_image_event,
+    TaskType.AMEND_MEMORY_POINT: handle_amend_memory_point,
 }
 
 

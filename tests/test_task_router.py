@@ -100,7 +100,7 @@ class TestTaskRegistry:
 
     def test_registry_contains_all_task_types(self):
         """Valida que TASK_REGISTRY tiene entradas para todos los tipos."""
-        assert len(TASK_REGISTRY) == 7
+        assert len(TASK_REGISTRY) == 8
         assert TaskType.EXTRACT_ENTITIES in TASK_REGISTRY
         assert TaskType.INIT_SESSION in TASK_REGISTRY
         assert TaskType.FOLLOW_UP in TASK_REGISTRY
@@ -108,6 +108,7 @@ class TestTaskRegistry:
         assert TaskType.VECTORIZE_EVENT in TASK_REGISTRY
         assert TaskType.CONSOLIDATE_MEMORY in TASK_REGISTRY
         assert TaskType.VECTORIZE_IMAGE_EVENT in TASK_REGISTRY
+        assert TaskType.AMEND_MEMORY_POINT in TASK_REGISTRY
 
     def test_registry_maps_extract_entities(self):
         """Valida el mapping correcto para extract_entities."""
@@ -139,6 +140,13 @@ class TestTaskRegistry:
         handler = TASK_REGISTRY.get(TaskType.VECTORIZE_IMAGE_EVENT)
         assert handler is not None
         assert handler.__name__ == "handle_vectorize_image_event"
+        assert callable(handler)
+
+    def test_registry_maps_amend_memory_point(self):
+        """Valida el mapping correcto para amend_memory_point (ADR-009, #89)."""
+        handler = TASK_REGISTRY.get(TaskType.AMEND_MEMORY_POINT)
+        assert handler is not None
+        assert handler.__name__ == "handle_amend_memory_point"
         assert callable(handler)
 
 
