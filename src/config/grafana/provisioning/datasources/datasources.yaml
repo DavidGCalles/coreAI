@@ -15,3 +15,27 @@ datasources:
     url: http://coreai_loki:3100
     access: proxy
     editable: false
+
+  # #91: estado de la cola y DLQ vía SQL de solo lectura contra la fuente
+  # de verdad (tabla tasks). Credenciales = defaults de .envExample; si el
+  # .env local cambia POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB,
+  # actualizar aquí también.
+  # Sin uid a propósito: Grafana 12 provisiona por uid y, al añadir uid a un
+  # datasource ya existente (Prometheus/Loki), falla con "data source not
+  # found". Los dashboards referencian por type, no por uid.
+  - name: Postgres
+    type: postgres
+    url: coreai_postgres:5432
+    user: coreai_user
+    database: coreai_db
+    secureJsonData:
+      password: postgres_secure_password
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1500
+      # Grafana 12 (plugin externo grafana-postgresql-datasource) lee la base
+      # desde jsonData.database; el campo top-level database ya no se mapea y
+      # la datasource queda sin default database (queries fallan en Explore).
+      database: coreai_db
+    access: proxy
+    editable: false
