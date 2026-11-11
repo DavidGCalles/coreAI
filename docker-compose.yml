@@ -165,6 +165,21 @@ services:
   # ==========================================
   # SUBSISTEMA DE OBSERVABILIDAD
   # ==========================================
+  # BUG-008 (#74): init de permisos de serie — los binds ./data/{grafana,
+  # prometheus,loki} creados por el daemon (root) reventaban a los usuarios
+  # no privilegiados de las imágenes (reboot loop, lección C del ADR-003).
+  # One-shot como root: mkdir + chown a los UIDs exactos; los tres servicios
+  # esperan a que complete. Heredado gratis por consumidores con include:.
+  permisos-volumenes:
+    image: alpine:latest
+    container_name: coreai_permisos_volumenes
+    volumes:
+      - ./data:/data
+    command:
+      - sh
+      - -c
+      - "mkdir -p /data/grafana /data/prometheus /data/loki && chown -R 472:472 /data/grafana && chown -R 65534:65534 /data/prometheus && chown -R 10001:10001 /data/loki"
+
   loki:
     image: grafana/loki:latest
     container_name: coreai_loki
@@ -173,6 +188,9 @@ services:
       - "127.0.0.1:3100:3100"
     volumes:
       - ./data/loki:/loki
+    depends_on:
+      permisos-volumenes:
+        condition: service_completed_successfully
     networks:
       - coreai_backend
 
@@ -186,6 +204,9 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
+    depends_on:
+      permisos-volumenes:
+        condition: service_completed_successfully
     networks:
       - coreai_backend
 
@@ -201,8 +222,12 @@ services:
       - ./data/grafana:/var/lib/grafana
       - ./src/config/grafana/provisioning:/etc/grafana/provisioning
     depends_on:
-      - prometheus
-      - loki
+      permisos-volumenes:
+        condition: service_completed_successfully
+      prometheus:
+        condition: service_started
+      loki:
+        condition: service_started
     networks:
       - coreai_backend
 
