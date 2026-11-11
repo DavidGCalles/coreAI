@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Estado y flujo de la cola de tareas del Córtex Asíncrono (#91). Estado vía Postgres (tabla tasks, fuente de verdad), trazas vía Loki (contextvar task_id del worker). Cero instrumentación Python (ADR-003). task_id/tipo/error viven en el JSONB payload; el id de la fila ES el task_id. Datasources referenciados por type (sin uid): Grafana 12 falla el provisioning si se añade uid a un datasource ya existente.",
+  "description": "Estado y flujo de la cola de tareas del Córtex Asíncrono (#91). Estado vía Postgres (tabla tasks, fuente de verdad), trazas vía Loki (contextvar task_id del worker). Cero instrumentación Python (ADR-003). task_id/tipo/error viven en el JSONB payload; el id de la fila ES el task_id. Datasources referenciados por type (sin uid): Grafana 12 falla el provisioning si se añade uid a un datasource ya existente. Ojo: en Grafana 12 el type real del datasource Postgres es grafana-postgresql-datasource (no postgres); las refs por type de los paneles usan ese id exacto.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -53,7 +53,7 @@
     },
     {
       "datasource": {
-        "type": "postgres"
+        "type": "grafana-postgresql-datasource"
       },
       "gridPos": {
         "h": 6,
@@ -99,7 +99,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres"
+            "type": "grafana-postgresql-datasource"
           },
           "editorMode": "code",
           "format": "table",
@@ -111,7 +111,7 @@
     },
     {
       "datasource": {
-        "type": "postgres"
+        "type": "grafana-postgresql-datasource"
       },
       "gridPos": {
         "h": 6,
@@ -157,7 +157,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres"
+            "type": "grafana-postgresql-datasource"
           },
           "editorMode": "code",
           "format": "table",
@@ -169,7 +169,7 @@
     },
     {
       "datasource": {
-        "type": "postgres"
+        "type": "grafana-postgresql-datasource"
       },
       "gridPos": {
         "h": 6,
@@ -215,7 +215,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres"
+            "type": "grafana-postgresql-datasource"
           },
           "editorMode": "code",
           "format": "time_series",
@@ -227,7 +227,7 @@
     },
     {
       "datasource": {
-        "type": "postgres"
+        "type": "grafana-postgresql-datasource"
       },
       "gridPos": {
         "h": 6,
@@ -277,7 +277,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres"
+            "type": "grafana-postgresql-datasource"
           },
           "editorMode": "code",
           "format": "table",
@@ -301,7 +301,7 @@
     },
     {
       "datasource": {
-        "type": "postgres"
+        "type": "grafana-postgresql-datasource"
       },
       "gridPos": {
         "h": 8,
@@ -337,7 +337,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres"
+            "type": "grafana-postgresql-datasource"
           },
           "editorMode": "code",
           "format": "time_series",
@@ -349,7 +349,7 @@
     },
     {
       "datasource": {
-        "type": "postgres"
+        "type": "grafana-postgresql-datasource"
       },
       "gridPos": {
         "h": 8,
@@ -386,7 +386,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres"
+            "type": "grafana-postgresql-datasource"
           },
           "editorMode": "code",
           "format": "time_series",
@@ -398,7 +398,7 @@
     },
     {
       "datasource": {
-        "type": "postgres"
+        "type": "grafana-postgresql-datasource"
       },
       "gridPos": {
         "h": 6,
@@ -452,7 +452,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres"
+            "type": "grafana-postgresql-datasource"
           },
           "editorMode": "code",
           "format": "table",
@@ -476,7 +476,7 @@
     },
     {
       "datasource": {
-        "type": "postgres"
+        "type": "grafana-postgresql-datasource"
       },
       "gridPos": {
         "h": 8,
@@ -523,7 +523,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres"
+            "type": "grafana-postgresql-datasource"
           },
           "editorMode": "code",
           "format": "table",
@@ -577,7 +577,7 @@
     },
     {
       "datasource": {
-        "type": "postgres"
+        "type": "grafana-postgresql-datasource"
       },
       "gridPos": {
         "h": 8,
@@ -624,7 +624,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres"
+            "type": "grafana-postgresql-datasource"
           },
           "editorMode": "code",
           "format": "table",
