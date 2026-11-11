@@ -85,7 +85,8 @@ async def test_ensure_relational_schema_segunda_corrida_no_cambia_el_contrato(mo
     await ensure_relational_schema()
     await ensure_relational_schema()
 
-    assert order == ["enum"] * 8 + ["create_all"] * 2
+    # cada corrida emite enum×4 → create_all; dos corridas = (enum×4 + create_all) × 2
+    assert order == (["enum"] * 4 + ["create_all"]) * 2
 
 
 async def test_integracion_contra_test_db_dos_veces_es_idempotente():
