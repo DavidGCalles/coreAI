@@ -14,6 +14,7 @@ from src.logging_config import configure_logging
 from src.mcp.tools.task_tools import get_task_tools, handle_task_tool
 from src.mcp.tools.recall_tools import get_recall_tools, handle_recall_tool
 from src.mcp.resources.contract_resources import get_contract_resources, read_contract_resource
+from src.db.bootstrap import ensure_relational_schema
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any
@@ -211,6 +212,29 @@ def run_dual(host: str, port: int) -> None:
     asyncio.run(run_stdio())
 
 
+async def bootstrap_schema_with_backoff() -> None:
+    """
+    BUG-010 #87: garantía del esquema relacional al arranque (gemelo del
+    BUG-001 en el lado Postgres). Mismo espíritu que ensure_collections del
+    worker: si Postgres aún no responde, backoff exponencial — el server no
+    sirve hasta tener el esquema garantizado, porque un despliegue limpio
+    moría en el primer dispatch con UndefinedTableError.
+    """
+    backoff = 1.0
+    while True:
+        try:
+            await ensure_relational_schema()
+            logger.info("Arranque: esquema relacional garantizado (BUG-010 #87)")
+            return
+        except Exception as schema_error:
+            logger.error(
+                "No se pudo garantizar el esquema relacional: %s — reintento en %.1fs",
+                schema_error, backoff,
+            )
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Frontera MCP de coreAI: mismo server, STDIO y streamable HTTP."
@@ -233,6 +257,9 @@ def main() -> None:
         help="Puerto de http/dual (default 8000: una sola fuente de verdad de puertos).",
     )
     args = parser.parse_args()
+
+    # BUG-010 #87: esquema garantizado antes de servir, en los tres transportes.
+    asyncio.run(bootstrap_schema_with_backoff())
 
     if args.serving == "http":
         run_http(args.host, args.port)

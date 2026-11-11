@@ -64,6 +64,8 @@ docker compose up -d
 pytest
 ```
 
+> El esquema relacional (los 4 enums + las tablas) se autogestiona al arranque de `core-mcp` (BUG-010): tras un `docker compose down -v`, el primer `docker compose up` ya procesa un dispatch sin pasos manuales. `scripts/db/` sigue vetado (legacy desincronizado).
+
 **Prerrequisitos:**
 - Docker + Docker Compose.
 - Modelos: Infinity sirve embeddings de texto e imagen desde `/data` (ver `scripts/prepare_model.py` — el kit CLIP de visión lo prepara `scripts/prepare_clip_kit.py`); el chat apunta al gateway LiteLLM (`:4000`, config en `src/config/litellm_config.edge.yaml`), que enruta hacia tu modelo local.
@@ -102,7 +104,7 @@ pytest
 src/
   config/        # litellm_config.edge.yaml, provisioning de Prometheus/Grafana
   contracts/     # Registro central de contratos de tarea (ADR-006-001)
-  db/            # SQLAlchemy: modelos, sesiones, repositorios (relacional + vectorial)
+  db/            # SQLAlchemy: modelos, bootstrap del esquema al arranque (BUG-010), sesiones, repositorios
   managers/      # TaskManager, HybridMemoryManager, LLMClient, ConfigManager
   mcp/tools/     # Superficie MCP (coreai_dispatch_task, coreai_get_task, coreai_search_context, coreai_search_image)
   schemas/       # Contratos Pydantic: tasks, memory, llm, recall
