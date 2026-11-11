@@ -19,7 +19,7 @@ services:
     networks:
       - coreai_backend
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $ぶ{POSTGRES_USER:-coreai_user} -d $ぶ{POSTGRES_DB:-coreai_db}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-coreai_user} -d ${POSTGRES_DB:-coreai_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
