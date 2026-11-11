@@ -33,5 +33,9 @@ datasources:
     jsonData:
       sslmode: disable
       postgresVersion: 1500
+      # Grafana 12 (plugin externo grafana-postgresql-datasource) lee la base
+      # desde jsonData.database; el campo top-level database ya no se mapea y
+      # la datasource queda sin default database (queries fallan en Explore).
+      database: coreai_db
     access: proxy
     editable: false
