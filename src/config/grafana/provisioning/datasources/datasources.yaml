@@ -3,6 +3,7 @@ apiVersion: 1
 datasources:
   - name: Prometheus
     type: prometheus
+    uid: prometheus
     # URL interna de la red de Docker
     url: http://coreai_prometheus:9090
     access: proxy
@@ -11,7 +12,26 @@ datasources:
 
   - name: Loki
     type: loki
+    uid: loki
     # URL interna de la red de Docker
     url: http://coreai_loki:3100
+    access: proxy
+    editable: false
+
+  # #91: estado de la cola y DLQ vía SQL de solo lectura contra la fuente
+  # de verdad (tabla tasks). Credenciales = defaults de .envExample; si el
+  # .env local cambia POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB,
+  # actualizar aquí también.
+  - name: Postgres
+    type: postgres
+    uid: postgres
+    url: coreai_postgres:5432
+    user: coreai_user
+    database: coreai_db
+    secureJsonData:
+      password: postgres_secure_password
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1500
     access: proxy
     editable: false

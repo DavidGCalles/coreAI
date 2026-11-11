@@ -1,0 +1,117 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Detalle de una tarea (#91): fila completa en Postgres + línea de vida en Loki por task_id. Recibe var-task_id por URL (data link desde coreAI Tasks). Nota: coreai_mcp es contenedor lanzadera (el server MCP corre vía docker exec y no alimenta Loki) — la línea de vida efectiva es la del worker; verificar en vivo si la frontera trazara task_id.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": [
+    "coreai",
+    "tasks",
+    "observabilidad"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 0,
+        "label": "task_id",
+        "name": "task_id",
+        "options": [],
+        "query": "",
+        "type": "textbox"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "title": "coreAI Task Detail",
+  "uid": "coreai-task-detail",
+  "panels": [
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "type": "table",
+      "title": "La fila completa (tasks)",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT id, session_id, status, payload, created_at, updated_at FROM tasks WHERE id::text = '$task_id'",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "id": 2,
+      "type": "logs",
+      "title": "Línea de vida (logs con el task_id)",
+      "options": {
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Ascending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{container_name=~\"coreai_worker|coreai_mcp\"} |= \"$task_id\"",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}
