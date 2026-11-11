@@ -15,6 +15,7 @@ from src.mcp.tools.task_tools import get_task_tools, handle_task_tool
 from src.mcp.tools.recall_tools import get_recall_tools, handle_recall_tool
 from src.mcp.resources.contract_resources import get_contract_resources, read_contract_resource
 from src.db.bootstrap import ensure_relational_schema
+from src.db.database import engine
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any
@@ -224,6 +225,16 @@ async def bootstrap_schema_with_backoff() -> None:
     while True:
         try:
             await ensure_relational_schema()
+            # BUG-010 fix: este bootstrap corre en su propio event loop
+            # (asyncio.run en main) y el pool global de asyncpg queda con
+            # conexiones atadas a ese loop ya cerrado. Sin vaciar el pool,
+            # el server reutiliza esas conexiones en su propio loop y
+            # asyncpg revienta con InterfaceError "another operation is in
+            # progress" en la primera query real (p.ej. el get-or-create
+            # de system_default del dispatch). dispose() cierra esas
+            # conexiones DENTRO de este loop, antes de que asyncio.run lo
+            # cierre — el server arranca con el pool vacío.
+            await engine.dispose()
             logger.info("Arranque: esquema relacional garantizado (BUG-010 #87)")
             return
         except Exception as schema_error:
