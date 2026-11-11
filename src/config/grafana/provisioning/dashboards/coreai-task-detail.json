@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Detalle de una tarea (#91): fila completa en Postgres + línea de vida en Loki por task_id. Recibe var-task_id por URL (data link desde coreAI Tasks). Nota: coreai_mcp es contenedor lanzadera (el server MCP corre vía docker exec y no alimenta Loki) — la línea de vida efectiva es la del worker; verificar en vivo si la frontera trazara task_id.",
+  "description": "Detalle de una tarea (#91): fila completa en Postgres + línea de vida en Loki por task_id. Recibe var-task_id por URL (data link desde coreAI Tasks). Nota: coreai_mcp es contenedor lanzadera (el server MCP corre vía docker exec y no alimenta Loki) — la línea de vida efectiva es la del worker. Datasources por type, sin uid.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -41,8 +41,7 @@
   "panels": [
     {
       "datasource": {
-        "type": "postgres",
-        "uid": "postgres"
+        "type": "postgres"
       },
       "gridPos": {
         "h": 10,
@@ -70,8 +69,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres",
-            "uid": "postgres"
+            "type": "postgres"
           },
           "editorMode": "code",
           "format": "table",
@@ -83,8 +81,7 @@
     },
     {
       "datasource": {
-        "type": "loki",
-        "uid": "loki"
+        "type": "loki"
       },
       "gridPos": {
         "h": 14,
@@ -104,8 +101,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "loki",
-            "uid": "loki"
+            "type": "loki"
           },
           "expr": "{container_name=~\"coreai_worker|coreai_mcp\"} |= \"$task_id\"",
           "queryType": "range",

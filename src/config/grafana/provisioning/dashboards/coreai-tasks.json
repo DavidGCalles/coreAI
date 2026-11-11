@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Estado y flujo de la cola de tareas del Córtex Asíncrono (#91). Estado vía Postgres (tabla tasks, fuente de verdad), trazas vía Loki (contextvar task_id del worker). Cero instrumentación Python (ADR-003). task_id/tipo/error viven en el JSONB payload; el id de la fila ES el task_id.",
+  "description": "Estado y flujo de la cola de tareas del Córtex Asíncrono (#91). Estado vía Postgres (tabla tasks, fuente de verdad), trazas vía Loki (contextvar task_id del worker). Cero instrumentación Python (ADR-003). task_id/tipo/error viven en el JSONB payload; el id de la fila ES el task_id. Datasources referenciados por type (sin uid): Grafana 12 falla el provisioning si se añade uid a un datasource ya existente.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -53,8 +53,7 @@
     },
     {
       "datasource": {
-        "type": "postgres",
-        "uid": "postgres"
+        "type": "postgres"
       },
       "gridPos": {
         "h": 6,
@@ -100,8 +99,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres",
-            "uid": "postgres"
+            "type": "postgres"
           },
           "editorMode": "code",
           "format": "table",
@@ -113,8 +111,7 @@
     },
     {
       "datasource": {
-        "type": "postgres",
-        "uid": "postgres"
+        "type": "postgres"
       },
       "gridPos": {
         "h": 6,
@@ -160,8 +157,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres",
-            "uid": "postgres"
+            "type": "postgres"
           },
           "editorMode": "code",
           "format": "table",
@@ -173,8 +169,7 @@
     },
     {
       "datasource": {
-        "type": "postgres",
-        "uid": "postgres"
+        "type": "postgres"
       },
       "gridPos": {
         "h": 6,
@@ -220,8 +215,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres",
-            "uid": "postgres"
+            "type": "postgres"
           },
           "editorMode": "code",
           "format": "time_series",
@@ -233,8 +227,7 @@
     },
     {
       "datasource": {
-        "type": "postgres",
-        "uid": "postgres"
+        "type": "postgres"
       },
       "gridPos": {
         "h": 6,
@@ -284,8 +277,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres",
-            "uid": "postgres"
+            "type": "postgres"
           },
           "editorMode": "code",
           "format": "table",
@@ -309,8 +301,7 @@
     },
     {
       "datasource": {
-        "type": "postgres",
-        "uid": "postgres"
+        "type": "postgres"
       },
       "gridPos": {
         "h": 8,
@@ -346,8 +337,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres",
-            "uid": "postgres"
+            "type": "postgres"
           },
           "editorMode": "code",
           "format": "time_series",
@@ -359,8 +349,7 @@
     },
     {
       "datasource": {
-        "type": "postgres",
-        "uid": "postgres"
+        "type": "postgres"
       },
       "gridPos": {
         "h": 8,
@@ -397,8 +386,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres",
-            "uid": "postgres"
+            "type": "postgres"
           },
           "editorMode": "code",
           "format": "time_series",
@@ -410,8 +398,7 @@
     },
     {
       "datasource": {
-        "type": "postgres",
-        "uid": "postgres"
+        "type": "postgres"
       },
       "gridPos": {
         "h": 6,
@@ -465,8 +452,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres",
-            "uid": "postgres"
+            "type": "postgres"
           },
           "editorMode": "code",
           "format": "table",
@@ -490,8 +476,7 @@
     },
     {
       "datasource": {
-        "type": "postgres",
-        "uid": "postgres"
+        "type": "postgres"
       },
       "gridPos": {
         "h": 8,
@@ -538,8 +523,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres",
-            "uid": "postgres"
+            "type": "postgres"
           },
           "editorMode": "code",
           "format": "table",
@@ -551,8 +535,7 @@
     },
     {
       "datasource": {
-        "type": "loki",
-        "uid": "loki"
+        "type": "loki"
       },
       "gridPos": {
         "h": 8,
@@ -572,8 +555,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "loki",
-            "uid": "loki"
+            "type": "loki"
           },
           "expr": "{container_name=\"coreai_worker\"} |= \"$task_id\"",
           "queryType": "range",
@@ -595,8 +577,7 @@
     },
     {
       "datasource": {
-        "type": "postgres",
-        "uid": "postgres"
+        "type": "postgres"
       },
       "gridPos": {
         "h": 8,
@@ -643,8 +624,7 @@
       "targets": [
         {
           "datasource": {
-            "type": "postgres",
-            "uid": "postgres"
+            "type": "postgres"
           },
           "editorMode": "code",
           "format": "table",
