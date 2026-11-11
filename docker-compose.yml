@@ -19,10 +19,12 @@ services:
     networks:
       - coreai_backend
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-coreai_user} -d $${POSTGRES_DB:-coreai_db}"]
+      test: ["CMD-SHELL", "pg_isready -U $ぶ{POSTGRES_USER:-coreai_user} -d $ぶ{POSTGRES_DB:-coreai_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
+    # #92: logs del motor (errores de conexión, checkpoints, OOM) a Loki
+    logging: *loki-logging
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -32,12 +34,16 @@ services:
       - .env
     environment:
       - QDRANT__TELEMETRY_DISABLED=true
+      # #92: prefijo propio en /metrics para mantener limpio el namespace global
+      - QDRANT__SERVICE__METRICS_PREFIX=qdrant_
     ports:
       - "6333:6333" 
     volumes:
       - ./data/qdrant:/qdrant/storage
     networks:
       - coreai_backend
+    # #92: logs de Qdrant (optimizaciones, WAL, compaction, errores de colección) a Loki
+    logging: *loki-logging
 
   litellm:
     image: ghcr.io/berriai/litellm:main-latest

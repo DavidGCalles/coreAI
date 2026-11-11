@@ -12,3 +12,11 @@ scrape_configs:
     metrics_path: '/metrics'
     static_configs:
       - targets: ['coreai_infinity:8080']
+
+  # #92: Qdrant expone métricas nativas en /metrics (búsqueda, colecciones,
+  # optimizaciones). QDRANT__TELEMETRY_DISABLED solo corta las estadísticas
+  # anónimas upstream; /metrics sigue activo.
+  - job_name: 'qdrant'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['coreai_qdrant:6333']
