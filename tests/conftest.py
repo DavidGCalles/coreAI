@@ -16,3 +16,18 @@ def protect_dev_database():
     
     if "coreai_test_db" not in url:
         pytest.exit(f"¡ALERTA! Pytest intentó conectarse a la BD de desarrollo: {url}")
+
+
+@pytest.fixture(autouse=True)
+async def dispose_engine_pool():
+    """
+    pytest-asyncio crea un event loop nuevo por test, pero el pool del engine
+    asyncpg retiene conexiones creadas en el loop del test anterior: el
+    siguiente test que reutilice una conexión del pool revienta con
+    "Future attached to a different loop". Dispose tras cada test para que
+    cada uno arranque con el pool limpio.
+    """
+    yield
+    from src.db.database import engine
+
+    await engine.dispose()
