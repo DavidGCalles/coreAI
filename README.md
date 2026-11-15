@@ -65,6 +65,8 @@ pytest
 ```
 
 > El esquema relacional (los 4 enums + las tablas) se autogestiona al arranque de `core-mcp` (BUG-010): tras un `docker compose down -v`, el primer `docker compose up` ya procesa un dispatch sin pasos manuales. `scripts/db/` sigue vetado (legacy desincronizado).
+>
+> **Regla de esquema aditivo (ADR-011):** los modelos ORM son la única fuente de verdad del esquema; no hay migraciones (Alembic queda fuera del repo) y el bootstrap garantiza al arranque las tablas, columnas y valores de enum que falten. El esquema evoluciona solo de forma aditiva: sin DROP, renombres ni cambios de tipo salvo ADR explícito con script one-shot documentado; toda columna nueva es nullable o lleva default.
 
 **Prerrequisitos:**
 - Docker + Docker Compose.
@@ -135,6 +137,7 @@ scripts/         # prepare_model (+ prepare_clip_kit), schedulers/crontab
 | [007](docs/adr/007-multimodal-memory.md) | Memoria Multimodal — adopción anticipada y acotada (identificación visual, demo ELIOS) (✅ implementado, 23 oct) |
 | [008](docs/adr/008-mcp-streamable-http.md) | Superficie MCP sobre Streamable HTTP — el mismo server sirve STDIO y streamable HTTP; service del compose en http (✅ implementado, 28 oct) |
 | [009](docs/adr/009-memory-correction-surface.md) | Superficie de Corrección de la Memoria — el ciclo de vida de lo ya almacenado es del substrato: corrección de metadata por evento, sin re-embedding (✅ implementado, 3 nov) |
+| [011](docs/adr/011-esquema-aditivo-bootstrap-idempotente.md) | Esquema Aditivo con Bootstrap Idempotente — los modelos ORM son la única fuente de verdad del esquema; Alembic fuera del repo; evolución solo aditiva garantizada al arranque (✅ implementado, 15 nov) |
 
 ## Estado del proyecto
 
