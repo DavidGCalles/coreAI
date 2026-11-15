@@ -145,7 +145,7 @@ async def test_ensure_columns_esquema_completo_no_emite_ningun_alter():
 
 
 async def test_ensure_relational_schema_orden_completo(monkeypatch):
-    """enums -> create_all (misma tx) -> alter_value+commit por valor -> col_query por tabla."""
+    """enums -> create_all (misma tx) -> alter_value+commit por valor -> col_query por tabla -> commit final."""
     order: list = []
     conn_begin = _mock_conn(order)
     conn_alter = _mock_conn(order, existing_columns=_all_columns_by_table())
@@ -158,6 +158,7 @@ async def test_ensure_relational_schema_orden_completo(monkeypatch):
         + ["create_all"]
         + ["alter_value", "commit"] * TOTAL_ENUM_VALUES
         + ["col_query"] * len(Base.metadata.sorted_tables)
+        + ["commit"]  # el commit explícito que cierra el tx de los ALTER TABLE
     )
     assert order == expected
     # create_all va con checkfirst (default) sobre el metadata de los modelos
@@ -178,6 +179,7 @@ async def test_ensure_relational_schema_segunda_corrida_no_cambia_el_contrato(mo
         + ["create_all"]
         + ["alter_value", "commit"] * TOTAL_ENUM_VALUES
         + ["col_query"] * len(Base.metadata.sorted_tables)
+        + ["commit"]  # cierra el tx de los ALTER TABLE
     )
     assert order == one_run * 2
 
