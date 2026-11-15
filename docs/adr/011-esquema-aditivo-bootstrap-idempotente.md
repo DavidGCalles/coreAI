@@ -1,7 +1,7 @@
 # ADR-011: Esquema aditivo con bootstrap idempotente — Alembic queda fuera del repo
 
 ## Status
-Proposed (12 nov 2026) — pendiente de aceptación de David. Al aceptarse pasa a Accepted con fecha, como el resto de la serie.
+Accepted (15 nov 2026) — familia completada: [ADR-011-001] #100 implementado (PR #102): pin de Alembic fuera, bootstrap ampliado con ALTERs idempotentes y suite en verde en la VM de desarrollo. Proposed 12 nov 2026.
 
 ## Context and Problem Statement
 
@@ -69,9 +69,17 @@ La fricción de montar Alembic de verdad en este modelo es real: añade una segu
 *   Issue #30 (4.4) — Resiliencia, retries y DLQ: sus columnas nuevas (`retry_count`, `available_at`) son el primer cambio de esquema bajo esta regla, vía bootstrap aditivo.
 *   PRD coreAI — la mención legacy "migraciones Alembic previstas" queda retirada por este ADR.
 
+## Post-implementación (15 nov 2026)
+
+- **Aterrizó tal cual se decidió (PR #102):** pin de `alembic` fuera de `requirements.txt`; `ensure_enum_values` (un `ALTER TYPE ... ADD VALUE IF NOT EXISTS` por valor, con commit intermedio) y `ensure_columns` (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS` solo para columnas ausentes, derivado de `information_schema` vs `Base.metadata`). El orden quedó fijado: enums + `create_all` en una única transacción → `ALTER TYPE` con commits intermedios → `ALTER TABLE` en transacción propia, cerrada con commit explícito — necesario porque la conexión no autocompitea al volver al pool; sin él, los ALTERs no persisten.
+- **La regla quedó documentada donde se lee el repo:** bloque de esquema aditivo en el README junto al arranque rápido y fila del ADR-011 en la tabla de decisiones. La norma es audible en la revisión de PR, como dicta el driver.
+- **Verificación:** suite hermética del bootstrap — unitarios con engine mockeado (SQL emitido y orden; idempotencia en segunda ejecución) e integración contra `coreai_test_db` bajo el cortafuegos del conftest: idempotencia sobre esquema existente (dos ejecuciones, `pg_enum` completo) y despliegue limpio (DROP de tablas y enums → el bootstrap recrea solo el esquema completo, columnas verificadas contra `Base.metadata`). Suite en verde en la VM de desarrollo antes del merge de la familia. El arranque por `include:` se apoya en el mismo bootstrap; su validación E2E pertenece al despliegue del tenant.
+- **Deuda absorbida por la implementación:** la integración real contra la BD de test expuso que el pool asyncpg retiene conexiones ligadas al event loop del test que las creó (pytest-asyncio crea un loop por test: "Future attached to a different loop"). Fix durable para toda la suite, no solo el bootstrap: fixture autouse `dispose_engine_pool` en el conftest (`engine.dispose()` tras cada test).
+- **Primer cambio real de esquema bajo la regla, aún pendiente:** el 4.4 (#30) — columnas `retry_count` y `available_at` sobre `tasks`; el bootstrap las aplicará al arranque sin intervención. Todo cambio destructivo futuro sigue requiriendo ADR explícito con script one-shot documentado.
+
 ---
 
 # ISSUES
 
 ### [ADR-011-001] Implementación — quitar el pin de Alembic y ampliar el bootstrap con ALTERs idempotentes — #100
-Pendiente. Quita `alembic` de `requirements.txt`; amplía `src/db/bootstrap.py` con `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` y `ALTER TYPE ... ADD VALUE IF NOT EXISTS` (con commit intermedio); suite hermética que verifique idempotencia sobre esquema existente y despliegue limpio.
+Completado (15 nov, PR #102). Pin de Alembic fuera de `requirements.txt`; bootstrap ampliado con `ensure_enum_values` y `ensure_columns` (ALTERs idempotentes con commit intermedio); suite hermética con idempotencia sobre esquema existente y despliegue limpio; regla aditiva documentada en el README. Suite en verde en la VM de desarrollo antes del merge a la rama padre.
