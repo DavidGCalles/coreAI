@@ -223,3 +223,64 @@ async def test_integracion_contra_test_db_dos_veces_es_idempotente():
     for table in EXPECTED_TABLES:
         assert table in tables
     assert len(enum_rows) == TOTAL_ENUM_VALUES
+
+
+async def test_integracion_despliegue_limpio_recrea_el_esquema_completo():
+    """
+    Despliegue limpio (equivalente relacional del `down -v`): sin tablas ni
+    enums, el bootstrap recrea por sí solo el esquema completo — criterio de
+    aceptación del ADR-011-001: arranque sin pasos manuales. Verifica tablas,
+    tipos, valores de enum y que las columnas de cada tabla coinciden con
+    Base.metadata.
+    """
+    from src.db.database import engine
+
+    tablas = ", ".join(t.name for t in Base.metadata.sorted_tables)
+    enums = ", ".join(name for name, _ in ENUM_TYPES)
+    async with engine.begin() as conn:
+        await conn.execute(text(f"DROP TABLE IF EXISTS {tablas} CASCADE"))
+        await conn.execute(text(f"DROP TYPE IF EXISTS {enums} CASCADE"))
+
+    await ensure_relational_schema()
+
+    async with engine.connect() as conn:
+        types = (
+            await conn.execute(
+                text(
+                    "SELECT typname FROM pg_type WHERE typname IN "
+                    "('session_status', 'task_status', 'memory_domain_type', 'memory_visibility')"
+                )
+            )
+        ).scalars().all()
+        tables = (
+            await conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))
+        ).scalars().all()
+        enum_rows = (
+            await conn.execute(
+                text(
+                    "SELECT t.typname, e.enumlabel FROM pg_enum e "
+                    "JOIN pg_type t ON t.oid = e.enumtypid "
+                    "WHERE t.typname IN ('session_status', 'task_status', "
+                    "'memory_domain_type', 'memory_visibility')"
+                )
+            )
+        ).all()
+        columns = (
+            await conn.execute(
+                text(
+                    "SELECT table_name, column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public'"
+                )
+            )
+        ).all()
+
+    expected_columns = _all_columns_by_table()
+    assert set(types) == {name for name, _ in ENUM_TYPES}
+    for table in expected_columns:
+        assert table in tables
+    assert len(enum_rows) == TOTAL_ENUM_VALUES
+    actual: dict = {}
+    for table_name, column_name in columns:
+        if table_name in expected_columns:
+            actual.setdefault(table_name, set()).add(column_name)
+    assert actual == expected_columns
