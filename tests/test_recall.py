@@ -15,7 +15,7 @@ Decisiones que estos tests defienden (26 oct):
 - Simetría de superficie: project, top_k y umbral viajan igual en texto e
   imagen; sin filtro de tenant (identidad multi-tenant diferida).
 - La tool valida la forma en el borde, ANTES de abrir sesión.
-- DoD: tools/list son EXACTAMENTE las dos de tasks + las dos de recall.
+- DoD: tools/list son EXACTAMENTE las cuatro de tasks + las dos de recall.
 """
 
 import base64
@@ -478,7 +478,7 @@ async def test_tool_no_gestionada_revierta():
 
 def test_dod_tools_list_exacta():
     """
-    DoD del bloque: tools/list son EXACTAMENTE las dos de tasks + las dos
+    DoD del bloque: tools/list son EXACTAMENTE las cuatro de tasks + las dos
     de recall. El feature creep de superficie se defiende por test, no se
     asume por revisión (ADR-005: 'Tentación permanente').
     """
@@ -486,7 +486,8 @@ def test_dod_tools_list_exacta():
     assert names == {
         "coreai_dispatch_task",
         "coreai_get_task",
+        "coreai_list_tasks",
+        "coreai_retry_failed_task",
         "coreai_search_context",
         "coreai_search_image",
     }
-
