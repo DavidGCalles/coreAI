@@ -251,3 +251,253 @@ async def test_mcp_get_task_does_not_mutate_the_row(db_session):
     # Limpieza manual
     await db_session.delete(task_before)
     await db_session.commit()
+
+# =====================================================================
+# 4.4-003 (#105): superficie MCP de la DLQ — coreai_list_tasks +
+# coreai_retry_failed_task (reinyección manual)
+# =====================================================================
+
+async def _dispatch_task(db_session, content):
+    """Dispatcha una tarea válida y devuelve su task_id (sin worker)."""
+    arguments = {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": content}
+    }
+    dispatch_response = await handle_task_tool("coreai_dispatch_task", arguments)
+    assert dispatch_response["isError"] is False, f"El dispatch falló: {dispatch_response}"
+    return uuid.UUID(json.loads(dispatch_response["content"][0]["text"])["task_id"])
+
+async def _force_state(db_session, task_id, status, retry_count=None, payload=None):
+    """Deja la fila como la dejaría el worker al resolver el desenlace."""
+    values = {"status": status}
+    if retry_count is not None:
+        values["retry_count"] = retry_count
+    if payload is not None:
+        values["payload"] = payload
+    await db_session.execute(update(Task).where(Task.id == task_id).values(**values))
+    await db_session.commit()
+
+def _failed_payload(content):
+    """Payload como el que deja retry_task tras agotar los reintentos (4.4-002)."""
+    traza = "ConnectionError: gateway LiteLLM inalcanzable"
+    return {
+        "task_type": "vectorize_event",
+        "content": content,
+        "error_trace": traza,
+        "error_history": [
+            {"attempt": 1, "at": "2026-11-17T09:00:00+00:00", "trace": traza},
+            {"attempt": 2, "at": "2026-11-17T09:00:30+00:00", "trace": traza},
+            {"attempt": 3, "at": "2026-11-17T09:01:10+00:00", "trace": traza},
+        ],
+    }
+
+@pytest.mark.asyncio
+async def test_mcp_list_tasks_exposes_dlq_profile_on_failed(db_session):
+    """
+    4.4-003 (#105): la DLQ (status=FAILED) expone por ítem retry_count,
+    error_history y edad, en orden FIFO, sin mutar nada. El payload crudo
+    no viaja (perfil mínimo).
+    """
+    task_id = await _dispatch_task(db_session, "Tarea que agota sus reintentos.")
+    await _force_state(
+        db_session, task_id, TaskStatus.FAILED,
+        retry_count=3, payload=_failed_payload("Tarea que agota sus reintentos."),
+    )
+
+    response = await handle_task_tool("coreai_list_tasks", {"status": "FAILED", "limit": 10})
+    assert response["isError"] is False, f"El listado falló: {response}"
+
+    content = json.loads(response["content"][0]["text"])
+    assert content["status"] == "FAILED"
+    assert content["count"] >= 1
+
+    item = next(t for t in content["tasks"] if t["task_id"] == str(task_id))
+    assert item["task_type"] == "vectorize_event"
+    assert item["status"] == "FAILED"
+    assert item["retry_count"] == 3
+    assert item["error_trace"] == "ConnectionError: gateway LiteLLM inalcanzable"
+    assert [entrada["attempt"] for entrada in item["error_history"]] == [1, 2, 3]
+    assert item["age_seconds"] >= 0
+    assert "payload" not in item  # perfil mínimo: el payload crudo no viaja
+
+    # FIFO: la respuesta viaja ordenada de la más antigua a la más nueva
+    created = [t["created_at"] for t in content["tasks"]]
+    assert created == sorted(created)
+
+    # Read-only estricto: el listado no mutó la fila
+    await db_session.expire_all()
+    task_in_db = await db_session.get(Task, task_id)
+    assert task_in_db.status == TaskStatus.FAILED
+    assert task_in_db.retry_count == 3
+
+    # Limpieza manual
+    await db_session.delete(task_in_db)
+    await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_mcp_list_tasks_filters_by_status(db_session):
+    """4.4-003 (#105): el listado devuelve SOLO las tareas del estado pedido."""
+    failed_id = await _dispatch_task(db_session, "Tarea fallida para el filtro por estado.")
+    await _force_state(
+        db_session, failed_id, TaskStatus.FAILED,
+        retry_count=1, payload=_failed_payload("Tarea fallida para el filtro por estado."),
+    )
+    completed_id = await _dispatch_task(db_session, "Tarea completada para el filtro por estado.")
+    await _force_state(db_session, completed_id, TaskStatus.COMPLETED)
+
+    response = await handle_task_tool("coreai_list_tasks", {"status": "FAILED", "limit": 50})
+    assert response["isError"] is False, f"El listado falló: {response}"
+    ids = [t["task_id"] for t in json.loads(response["content"][0]["text"])["tasks"]]
+    assert str(failed_id) in ids
+    assert str(completed_id) not in ids
+
+    response_completed = await handle_task_tool("coreai_list_tasks", {"status": "COMPLETED", "limit": 50})
+    ids_completed = [t["task_id"] for t in json.loads(response_completed["content"][0]["text"])["tasks"]]
+    assert str(completed_id) in ids_completed
+    assert str(failed_id) not in ids_completed
+
+    # Limpieza manual
+    for task_id in (failed_id, completed_id):
+        await db_session.delete(await db_session.get(Task, task_id))
+    await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_mcp_list_tasks_invalid_status_is_explicit_error(db_session):
+    """4.4-003 (#105): un estado inventado rebota en la frontera, sin mutar la BD."""
+    before = await _row_counts(db_session)
+
+    response = await handle_task_tool("coreai_list_tasks", {"status": "garbage", "limit": 10})
+
+    assert response["isError"] is True, "Un estado inventado debe ser error explícito"
+    assert "garbage" in response["content"][0]["text"]
+
+    after = await _row_counts(db_session)
+    assert after == before, f"El rechazo mutó la BD: antes {before}, después {after}"
+
+@pytest.mark.asyncio
+async def test_mcp_list_tasks_limit_out_of_bounds_is_explicit_error(db_session):
+    """4.4-003 (#105): el contrato del límite (1..200) se aplica en la frontera."""
+    for limit in (0, 201):
+        response = await handle_task_tool("coreai_list_tasks", {"status": "FAILED", "limit": limit})
+        assert response["isError"] is True, f"limit={limit} debía rebotar en la frontera"
+
+@pytest.mark.asyncio
+async def test_mcp_retry_failed_task_reinjects_to_pending_from_scratch(db_session):
+    """
+    4.4-003 (#105): la reinyección manual deja la FAILED como recién nacida —
+    PENDING, retry_count=0, available_at=NULL — con el error_history intacto
+    (la mecánica se resetea, la auditoría no), y el listado PENDING la ve así.
+    """
+    task_id = await _dispatch_task(db_session, "Tarea fallida que se reinyecta manualmente.")
+    history = _failed_payload("Tarea fallida que se reinyecta manualmente.")
+    await _force_state(db_session, task_id, TaskStatus.FAILED, retry_count=3, payload=history)
+
+    response = await handle_task_tool("coreai_retry_failed_task", {"task_id": str(task_id)})
+    assert response["isError"] is False, f"La reinyección falló: {response}"
+
+    content = json.loads(response["content"][0]["text"])
+    assert content["task_id"] == str(task_id)
+    assert content["status"] == "PENDING"
+    assert content["retry_count"] == 0
+    assert content["available_at"] is None
+
+    await db_session.expire_all()
+    task_in_db = await db_session.get(Task, task_id)
+    assert task_in_db.status == TaskStatus.PENDING
+    assert task_in_db.retry_count == 0
+    assert task_in_db.available_at is None
+    # La auditoría queda intacta: la reinyección no reescribe el historial
+    assert task_in_db.payload["error_history"] == history["error_history"]
+
+    # Convergencia con la otra superficie: el listado PENDING la ve reseteada
+    pending = await handle_task_tool("coreai_list_tasks", {"status": "PENDING", "limit": 50})
+    assert pending["isError"] is False, f"El listado PENDING falló: {pending}"
+    item = next(
+        t for t in json.loads(pending["content"][0]["text"])["tasks"]
+        if t["task_id"] == str(task_id)
+    )
+    assert item["retry_count"] == 0
+    assert item["error_history"] == history["error_history"]
+
+    # Limpieza manual
+    await db_session.delete(task_in_db)
+    await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_mcp_retry_failed_task_rejects_non_failed_states(db_session):
+    """
+    4.4-003 (#105): solo FAILED es reinyectable — cualquier estado vivo
+    rebota con error explícito que nombra el estado, sin mutar la fila.
+    """
+    task_id = await _dispatch_task(db_session, "Tarea viva que nunca debe reinyectarse.")
+
+    for status in (TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.COMPLETED):
+        await _force_state(db_session, task_id, status)
+        response = await handle_task_tool("coreai_retry_failed_task", {"task_id": str(task_id)})
+
+        assert response["isError"] is True, (
+            f"Una {status.value} NO es reinyectable: el reintento debió rebotar"
+        )
+        assert status.value in response["content"][0]["text"]
+
+        # El rechazo no mutó la fila
+        await db_session.expire_all()
+        task_in_db = await db_session.get(Task, task_id)
+        assert task_in_db.status == status
+        assert task_in_db.retry_count == 0
+
+    # Limpieza manual
+    await db_session.delete(await db_session.get(Task, task_id))
+    await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_mcp_retry_failed_task_unknown_id_is_explicit_error(db_session):
+    """4.4-003 (#105): un task_id inexistente es error explícito, no silencio."""
+    ghost_id = uuid.uuid4()
+    before = await _row_counts(db_session)
+
+    response = await handle_task_tool("coreai_retry_failed_task", {"task_id": str(ghost_id)})
+
+    assert response["isError"] is True, "Un UUID fantasma debe ser error explícito"
+    assert str(ghost_id) in response["content"][0]["text"]
+
+    after = await _row_counts(db_session)
+    assert after == before, f"El rechazo mutó la BD: antes {before}, después {after}"
+
+@pytest.mark.asyncio
+async def test_mcp_retry_failed_task_malformed_args_is_explicit_error(db_session):
+    """4.4-003 (#105): un task_id malformado rebota en la frontera, síncrono."""
+    response = await handle_task_tool("coreai_retry_failed_task", {"task_id": "no-soy-un-uuid"})
+
+    assert response["isError"] is True, "Un task_id malformado debe rebotar en la frontera"
+
+@pytest.mark.asyncio
+async def test_mcp_retry_failed_task_converges_without_double_application(db_session):
+    """
+    4.4-003 (#105): el desenlace converge — la segunda reinyección sobre la
+    tarea ya reinyectada rebota con error explícito y NO aplica nada dos
+    veces: el UPDATE condicional (WHERE status=FAILED) ES la idempotencia.
+    """
+    task_id = await _dispatch_task(db_session, "Tarea reinyectada que no debe mutar dos veces.")
+    await _force_state(
+        db_session, task_id, TaskStatus.FAILED,
+        retry_count=3, payload=_failed_payload("Tarea reinyectada que no debe mutar dos veces."),
+    )
+
+    first = await handle_task_tool("coreai_retry_failed_task", {"task_id": str(task_id)})
+    assert first["isError"] is False, f"La primera reinyección falló: {first}"
+
+    second = await handle_task_tool("coreai_retry_failed_task", {"task_id": str(task_id)})
+    assert second["isError"] is True, "La segunda llamada ya no es FAILED: debe rebotar explícito"
+    assert "PENDING" in second["content"][0]["text"]
+
+    # La fila sigue exactamente donde la dejó la primera reinyección
+    await db_session.expire_all()
+    task_in_db = await db_session.get(Task, task_id)
+    assert task_in_db.status == TaskStatus.PENDING
+    assert task_in_db.retry_count == 0
+    assert task_in_db.available_at is None
+
+    # Limpieza manual
+    await db_session.delete(task_in_db)
+    await db_session.commit()
