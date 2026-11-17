@@ -27,3 +27,13 @@ LOCAL_LLM_API_BASE=http://192.168.1.37:1234/v1
 # ==========================================
 APP_ENV=development
 LOG_LEVEL=INFO
+
+# ==========================================
+# REINTENTOS DE TAREAS (Issue 4.4 — Retries y DLQ)
+# ==========================================
+# Reintentos de una tarea antes de FAILED (la DLQ lógica del 4.4)
+TASK_MAX_RETRIES=3
+# Backoff exponencial entre reintentos: base en segundos, techo en segundos y jitter (0.0-1.0)
+TASK_BACKOFF_BASE=1.0
+TASK_BACKOFF_CAP=30.0
+TASK_BACKOFF_JITTER=0.1

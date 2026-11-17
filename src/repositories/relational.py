@@ -1,7 +1,8 @@
 from typing import Generic, TypeVar, Type, Optional, Sequence, Any
 from uuid import UUID
 from datetime import datetime
-from sqlalchemy import select, update
+from sqlalchemy import select, update, or_
+from sqlalchemy.sql import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.database import Base
 from src.db.models import Entity, Session, Message, Task, Event, LLMAudit, TaskStatus
@@ -77,10 +78,18 @@ class TaskRepository(BaseRepository[Task]):
         Fase 1: Búsqueda y bloqueo atómico.
         Utiliza UPDATE ... RETURNING con una subquery SKIP LOCKED.
         Cero ORM, 100% transaccional nativo de PostgreSQL.
+
+        Disponibilidad (4.4-001 #103): solo se reclaman las PENDING cuyo
+        available_at sea NULL (nunca diferida) o ya vencido — una tarea
+        diferida espera en la cola sin que el claim la robe. La comparación
+        de vencimiento la hace Postgres (func.now(), consciente de zona).
         """
         subq = (
             select(Task.id)
-            .where(Task.status == TaskStatus.PENDING)
+            .where(
+                Task.status == TaskStatus.PENDING,
+                or_(Task.available_at.is_(None), Task.available_at <= func.now()),
+            )
             .order_by(Task.created_at.asc())
             .with_for_update(skip_locked=True)
             .limit(1)

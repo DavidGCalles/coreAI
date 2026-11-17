@@ -1,15 +1,18 @@
 """
-Tests del bootstrap idempotente del esquema relacional (BUG-010 #87; ampliado por ADR-011 #99/#100).
+Tests del bootstrap idempotente del esquema relacional (BUG-010 #87; ampliado por ADR-011 #99/#100 y 4.4-001 #103).
 
 ADR-011: el esquema evoluciona solo de forma aditiva y los modelos ORM son la
 única fuente de verdad (Alembic fuera del repo). El bootstrap garantiza:
 enums (CREATE TYPE condicional) -> create_all -> ALTER TYPE ADD VALUE IF NOT
 EXISTS (commit intermedio por valor) -> ALTER TABLE ADD COLUMN IF NOT EXISTS
-(derivado de information_schema).
+(derivado de information_schema, con DEFAULT si la columna lleva
+server_default) -> CREATE INDEX IF NOT EXISTS (derivado de pg_indexes).
 
 - Unitarios: engine mockeado, cero red — se verifica el SQL emitido y el orden.
 - Integración: contra coreai_test_db (el cortafuegos de conftest.py fija la
-  URL) se ejecuta de verdad dos veces y se verifica pg_type + pg_tables + pg_enum.
+  URL) se ejecuta de verdad dos veces y se verifica pg_type + pg_tables + pg_enum,
+  el backfill de las columnas nuevas en un despliegue con historia y los
+  índices en pg_indexes.
 """
 from unittest.mock import AsyncMock, MagicMock
 
@@ -21,6 +24,7 @@ from src.db.bootstrap import (
     ensure_columns,
     ensure_enum_values,
     ensure_enums,
+    ensure_indexes,
     ensure_relational_schema,
 )
 from src.db.database import Base
@@ -35,7 +39,24 @@ def _all_columns_by_table() -> dict:
     return {t.name: {c.name for c in t.columns} for t in Base.metadata.sorted_tables}
 
 
-def _mock_conn(order: list, existing_columns: dict | None = None) -> MagicMock:
+def _all_indexes_by_table() -> dict:
+    return {t.name: {i.name for i in t.indexes} for t in Base.metadata.sorted_tables}
+
+
+def _expected_index_tokens() -> list:
+    """Orden que emite ensure_indexes sobre un esquema SIN ningún índice."""
+    tokens: list = []
+    for t in Base.metadata.sorted_tables:
+        tokens.append("index_query")
+        tokens.extend(["create_index"] * len(t.indexes))
+    return tokens
+
+
+def _mock_conn(
+    order: list,
+    existing_columns: dict | None = None,
+    existing_indexes: dict | None = None,
+) -> MagicMock:
     """Conn mockeada: information_schema reporta las columnas de existing_columns."""
     conn = MagicMock()
     conn.dialect = postgresql.dialect()
@@ -46,11 +67,18 @@ def _mock_conn(order: list, existing_columns: dict | None = None) -> MagicMock:
             order.append("col_query")
             cols = (existing_columns or {}).get(params["t"], set())
             return [(c,) for c in cols]
+        if "pg_indexes" in sql:
+            order.append("index_query")
+            idx = (existing_indexes or {}).get(params["t"], set())
+            return [(i,) for i in idx]
         if sql.startswith("ALTER TYPE"):
             order.append("alter_value")
             return []
         if sql.startswith("ALTER TABLE"):
             order.append("alter_column")
+            return []
+        if sql.startswith("CREATE INDEX"):
+            order.append("create_index")
             return []
         order.append("enum")
         return []
@@ -132,6 +160,28 @@ async def test_ensure_columns_emite_alter_solo_para_las_columnas_que_faltan():
     assert order.count("col_query") == len(Base.metadata.sorted_tables)
 
 
+async def test_ensure_columns_incluye_el_default_de_las_columnas_con_server_default():
+    """4.4-001 #103 (D1): la columna que lleva server_default entra con su DEFAULT."""
+    order: list = []
+    existing = _all_columns_by_table()
+    existing["tasks"].discard("retry_count")  # simulamos un despliegue con historia
+    conn = _mock_conn(order, existing_columns=existing)
+
+    await ensure_columns(conn)
+
+    alters = [c.args[0].text for c in conn.execute.await_args_list if c.args[0].text.startswith("ALTER TABLE")]
+    assert len(alters) == 1
+    # El DEFAULT backfillea el 0 en las filas existentes; sin él, quedaría NULL.
+    assert alters[0] == "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS retry_count INTEGER DEFAULT 0"
+    # updated_at (func.now()) también compila su DEFAULT como expresión SQL
+    existing["tasks"] = {c for c in _all_columns_by_table()["tasks"]}
+    existing["tasks"].discard("updated_at")
+    conn2 = _mock_conn([], existing_columns=existing)
+    await ensure_columns(conn2)
+    alter2 = [c.args[0].text for c in conn2.execute.await_args_list if c.args[0].text.startswith("ALTER TABLE")][0]
+    assert "DEFAULT now()" in alter2
+
+
 async def test_ensure_columns_esquema_completo_no_emite_ningun_alter():
     """Idempotencia: con el esquema completo en information_schema no se emite ALTER."""
     order: list = []
@@ -144,8 +194,37 @@ async def test_ensure_columns_esquema_completo_no_emite_ningun_alter():
     assert order.count("col_query") == len(Base.metadata.sorted_tables)
 
 
+async def test_ensure_indexes_emite_create_index_if_not_exists_solo_para_los_ausentes():
+    """4.4-001 #103 (D2): índice ausente en pg_indexes -> CREATE INDEX IF NOT EXISTS."""
+    order: list = []
+    existing = _all_indexes_by_table()
+    existing["tasks"].discard("idx_tasks_claim")  # solo falta el índice nuevo del claim
+    conn = _mock_conn(order, existing_indexes=existing)
+
+    await ensure_indexes(conn)
+
+    creates = [c.args[0].text for c in conn.execute.await_args_list if c.args[0].text.startswith("CREATE INDEX")]
+    assert len(creates) == 1
+    assert creates[0].startswith("CREATE INDEX IF NOT EXISTS idx_tasks_claim ON tasks")
+    # El WHERE del índice parcial viaja con el DDL compilado desde el metadata
+    assert "status" in creates[0] and "available_at" in creates[0]
+    assert order.count("index_query") == len(Base.metadata.sorted_tables)
+
+
+async def test_ensure_indexes_esquema_completo_no_emite_ningun_create():
+    """Idempotencia: con todos los índices ya en pg_indexes no se emite nada."""
+    order: list = []
+    conn = _mock_conn(order, existing_indexes=_all_indexes_by_table())
+
+    await ensure_indexes(conn)
+
+    creates = [c for c in conn.execute.await_args_list if c.args[0].text.startswith("CREATE INDEX")]
+    assert creates == []
+    assert order.count("index_query") == len(Base.metadata.sorted_tables)
+
+
 async def test_ensure_relational_schema_orden_completo(monkeypatch):
-    """enums -> create_all (misma tx) -> alter_value+commit por valor -> col_query por tabla -> commit final."""
+    """enums -> create_all (misma tx) -> alter_value+commit por valor -> col_query por tabla -> index_query por tabla + create_index -> commit final."""
     order: list = []
     conn_begin = _mock_conn(order)
     conn_alter = _mock_conn(order, existing_columns=_all_columns_by_table())
@@ -158,7 +237,8 @@ async def test_ensure_relational_schema_orden_completo(monkeypatch):
         + ["create_all"]
         + ["alter_value", "commit"] * TOTAL_ENUM_VALUES
         + ["col_query"] * len(Base.metadata.sorted_tables)
-        + ["commit"]  # el commit explícito que cierra el tx de los ALTER TABLE
+        + _expected_index_tokens()
+        + ["commit"]  # el commit explícito que cierra el tx de columnas + índices
     )
     assert order == expected
     # create_all va con checkfirst (default) sobre el metadata de los modelos
@@ -179,7 +259,8 @@ async def test_ensure_relational_schema_segunda_corrida_no_cambia_el_contrato(mo
         + ["create_all"]
         + ["alter_value", "commit"] * TOTAL_ENUM_VALUES
         + ["col_query"] * len(Base.metadata.sorted_tables)
-        + ["commit"]  # cierra el tx de los ALTER TABLE
+        + _expected_index_tokens()
+        + ["commit"]  # cierra el tx de los ALTER TABLE + CREATE INDEX
     )
     assert order == one_run * 2
 
@@ -284,3 +365,67 @@ async def test_integracion_despliegue_limpio_recrea_el_esquema_completo():
         if table_name in expected_columns:
             actual.setdefault(table_name, set()).add(column_name)
     assert actual == expected_columns
+
+
+async def test_integracion_despliegue_con_historia_backfillea_columnas_e_indices():
+    """
+    4.4-001 #103: simula un despliegue CON HISTORIA — tablas ya creadas y con
+    filas, pero sin las columnas nuevas ni el índice del claim — y verifica
+    que el arranque las añade: retry_count aterriza en 0 en las filas
+    preexistentes (backfill del DEFAULT, D1) y idx_tasks_claim aparece en
+    pg_indexes (D2). Criterio de aceptación del issue: "despliegue limpio y
+    esquema existente quedan con las columnas nuevas tras el arranque".
+    """
+    from src.db.database import AsyncSessionLocal, engine
+    from src.repositories.relational import EntityRepository, SessionRepository, TaskRepository
+
+    await ensure_relational_schema()
+
+    # Fila "antigua": creada con el esquema completo ANTES de recortarlo.
+    async with AsyncSessionLocal() as session:
+        entity = await EntityRepository(session).create(role="test_historia")
+        session_db = await SessionRepository(session).create(entity_id=entity.id)
+        task = await TaskRepository(session).create(
+            session_id=session_db.id,
+            payload={"task_type": "dummy_test_task"},
+        )
+        await session.commit()
+        old_task_id = task.id
+
+    # Recorte a un esquema pre-4.4-001 (solo dentro del cortafuegos de test).
+    async with engine.begin() as conn:
+        await conn.execute(text("DROP INDEX IF EXISTS idx_tasks_claim"))
+        await conn.execute(text("ALTER TABLE tasks DROP COLUMN IF EXISTS retry_count"))
+        await conn.execute(text("ALTER TABLE tasks DROP COLUMN IF EXISTS available_at"))
+
+    # El arranque (re)garantiza el esquema: aquí es donde las D1/D2 deben morder.
+    await ensure_relational_schema()
+
+    async with engine.connect() as conn:
+        columns = (
+            await conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'tasks'"
+                )
+            )
+        ).scalars().all()
+        indexes = (
+            await conn.execute(
+                text(
+                    "SELECT indexname FROM pg_indexes "
+                    "WHERE schemaname = 'public' AND tablename = 'tasks'"
+                )
+            )
+        ).scalars().all()
+        retry_count = (
+            await conn.execute(
+                text("SELECT retry_count FROM tasks WHERE id = :t"),
+                {"t": old_task_id},
+            )
+        ).scalar_one()
+
+    assert "retry_count" in columns, "El bootstrap no trajo retry_count al esquema con historia."
+    assert "available_at" in columns, "El bootstrap no trajo available_at al esquema con historia."
+    assert "idx_tasks_claim" in indexes, "El bootstrap no creó el índice del claim en el esquema con historia."
+    assert retry_count == 0, "El DEFAULT debe backfillear retry_count=0 en las filas existentes."
