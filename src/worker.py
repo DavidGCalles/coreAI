@@ -1,11 +1,13 @@
 import asyncio
 import logging
+from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.database import AsyncSessionLocal
 from src.repositories.relational import TaskRepository
 from src.logging_config import configure_logging, set_current_task_id, clear_current_task_id
 from src.managers.config_manager import config_manager
 from src.workers.task_router import route_task
+from src.workers.failure_classification import es_fallo_determinista
 from src.schemas.memory import DomainType
 from src.db.vector_db import get_qdrant_client
 from src.repositories.vector import (
@@ -58,6 +60,45 @@ async def ensure_collections() -> None:
         vector_size=IMAGE_VECTOR_SIZE,
         distance=IMAGE_VECTOR_DISTANCE,
     )
+
+
+async def _resolver_fallo(repo: TaskRepository, task_id: UUID, error: Exception) -> None:
+    """
+    Fase 3 (Fallo) del ciclo del worker, con la clasificación del 4.4-002
+    (#104): fallo DETERMINISTA → fail_task (FAILED inmediato, cero
+    reintentos — reproduce el mismo error por muchos que se pruebe); fallo
+    TRANSITORIO → retry_task (PENDING diferida con backoff, o FAILED al
+    agotar max_retries).
+
+    Trabaja solo por UUID: la instancia task llega posiblemente expirada
+    tras el rollback del handler (lección #61) y no se toca.
+    """
+    # Trace HONESTO (#61): clase + mensaje de la excepción real. str(e) a
+    # secas perdía la clase (un httpx.ConnectError quedaba como «Connection
+    # refused» sin culpable, y una excepción sin mensaje como trace vacío).
+    # No se vuelca el traceback completo: el JSONB del payload ya viaja
+    # cargado con la data URI; el diagnóstico de una línea es el contrato de
+    # coreai_get_task.
+    trace = f"{type(error).__name__}: {error}"
+
+    if es_fallo_determinista(error):
+        await repo.fail_task(task_id, trace)
+        logger.info("Tarea %s FAILED: fallo determinista, sin reintento", task_id)
+        return
+
+    desenlace = await repo.retry_task(task_id, trace)
+    if desenlace is None:
+        logger.warning("Tarea %s desaparecida durante la resolución del fallo", task_id)
+    elif desenlace["outcome"] == "RETRY":
+        logger.info(
+            "Tarea %s difiere: reintento %s disponible en %s",
+            task_id, desenlace["retry_count"], desenlace["available_at"],
+        )
+    else:
+        logger.info(
+            "Tarea %s FAILED: reintentos agotados (%s), historial completo en el payload",
+            task_id, desenlace["retry_count"],
+        )
 
 
 async def worker_loop():
@@ -125,19 +166,13 @@ async def worker_loop():
                         logger.info("Tarea %s COMPLETED", task_id)
                         
                     except Exception as execution_error:
-                        # Fase 3 (Fallo controlado de negocio)
+                        # Fase 3 (Fallo controlado de negocio): la clasificación
+                        # determinista/transitoria del 4.4-002 (#104) decide el
+                        # desenlace — FAILED inmediato o reintento con backoff.
+                        # El trace honesto (clase + mensaje, lección #61) lo
+                        # construye _resolver_fallo, que trabaja por UUID.
                         logger.error("Fallo ejecutando tarea %s: %s", task_id, execution_error)
-                        # Trace HONESTO (#61): clase + mensaje de la excepción real.
-                        # str(e) a secas perdía la clase (un httpx.ConnectError quedaba
-                        # como «Connection refused» sin culpable, y una excepción sin
-                        # mensaje como trace vacío). No se vuelca el traceback
-                        # completo: el JSONB del payload ya viaja cargado con la
-                        # data URI; el diagnóstico de una línea es el contrato de
-                        # coreai_get_task.
-                        await repo.fail_task(
-                            task_id,
-                            f"{type(execution_error).__name__}: {execution_error}",
-                        )
+                        await _resolver_fallo(repo, task_id, execution_error)
                     finally:
                         # El ciclo de la tarea termina (bien o mal): suelta el
                         # UUID del contexto para no filtrarlo a la siguiente.
