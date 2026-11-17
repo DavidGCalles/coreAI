@@ -1,6 +1,7 @@
 import uuid
 import enum
-from sqlalchemy import String, Text, Boolean, JSON, ForeignKey, DateTime, Index, Integer
+from datetime import datetime
+from sqlalchemy import String, Text, Boolean, JSON, ForeignKey, DateTime, Index, Integer, text
 from sqlalchemy.dialects.postgresql import UUID, ENUM as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -100,11 +101,21 @@ class Task(Base):
     )
     payload: Mapped[dict] = mapped_column(JSON, default={})
     
+    # Disponibilidad del claim (4.4-001 #103): disponible YA si available_at es
+    # NULL, diferida hasta su vencimiento en caso contrario. retry_count nace
+    # en 0 — con server_default para que el ALTER aditivo del bootstrap
+    # backfillee 0 en las filas de un despliegue con historia (ADR-011).
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=True, default=0, server_default=text("0"))
+    available_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
         Index('idx_tasks_status', 'status', postgresql_where=(status == 'PENDING')),
+        # Ventana de claim (4.4-001 #103): cubre justo el subconjunto que
+        # evalúa claim_next_task — PENDING × su vencimiento.
+        Index('idx_tasks_claim', 'status', 'available_at', postgresql_where=(status == 'PENDING')),
     )
 
 class Event(Base):

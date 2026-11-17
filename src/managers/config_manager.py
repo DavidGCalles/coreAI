@@ -61,5 +61,20 @@ class ConfigManager:
             "log_level": os.getenv("LOG_LEVEL", "INFO")
         }
 
+    def get_retry_config(self) -> dict[str, Any]:
+        """
+        Configuración de reintentos de tareas (4.4-001 #103).
+
+        La consume retry_task del 4.4-002 (#104): hasta max_retries con backoff
+        exponencial (base en segundos, techo cap y jitter 0.0-1.0). Defaults
+        conservadores para que un despliegue sin tocar nada funcione igual.
+        """
+        return {
+            "max_retries": int(os.getenv("TASK_MAX_RETRIES", "3")),
+            "backoff_base_seconds": float(os.getenv("TASK_BACKOFF_BASE", "1.0")),
+            "backoff_cap_seconds": float(os.getenv("TASK_BACKOFF_CAP", "30.0")),
+            "backoff_jitter": float(os.getenv("TASK_BACKOFF_JITTER", "0.1")),
+        }
+
 # Instancia Singleton exportada
 config_manager = ConfigManager()
