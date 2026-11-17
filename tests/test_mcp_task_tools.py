@@ -325,7 +325,7 @@ async def test_mcp_list_tasks_exposes_dlq_profile_on_failed(db_session):
     assert created == sorted(created)
 
     # Read-only estricto: el listado no mutó la fila
-    await db_session.expire_all()
+    db_session.expire_all()
     task_in_db = await db_session.get(Task, task_id)
     assert task_in_db.status == TaskStatus.FAILED
     assert task_in_db.retry_count == 3
@@ -401,7 +401,7 @@ async def test_mcp_retry_failed_task_reinjects_to_pending_from_scratch(db_sessio
     assert content["retry_count"] == 0
     assert content["available_at"] is None
 
-    await db_session.expire_all()
+    db_session.expire_all()
     task_in_db = await db_session.get(Task, task_id)
     assert task_in_db.status == TaskStatus.PENDING
     assert task_in_db.retry_count == 0
@@ -441,7 +441,7 @@ async def test_mcp_retry_failed_task_rejects_non_failed_states(db_session):
         assert status.value in response["content"][0]["text"]
 
         # El rechazo no mutó la fila
-        await db_session.expire_all()
+        db_session.expire_all()
         task_in_db = await db_session.get(Task, task_id)
         assert task_in_db.status == status
         assert task_in_db.retry_count == 0
@@ -492,7 +492,7 @@ async def test_mcp_retry_failed_task_converges_without_double_application(db_ses
     assert "PENDING" in second["content"][0]["text"]
 
     # La fila sigue exactamente donde la dejó la primera reinyección
-    await db_session.expire_all()
+    db_session.expire_all()
     task_in_db = await db_session.get(Task, task_id)
     assert task_in_db.status == TaskStatus.PENDING
     assert task_in_db.retry_count == 0
