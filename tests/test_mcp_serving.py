@@ -36,6 +36,8 @@ from src.schemas.recall import MemoryHit, RecallResponse
 EXPECTED_TOOLS = {
     "coreai_dispatch_task",
     "coreai_get_task",
+    "coreai_list_tasks",
+    "coreai_retry_failed_task",
     "coreai_search_context",
     "coreai_search_image",
 }
@@ -134,7 +136,7 @@ async def test_tools_list_identico_por_ambos_transportes(http_server_url):
             # el cierre de los streams de memoria termina el driver run()
         # el task group espera a que run() vea el EOF
 
-    # Las 4 tools de la frontera, por ambos transportes
+    # Las 6 tools de la frontera (4 + superficie DLQ del 4.4-003, #105), por ambos transportes
     assert {t.name for t in http_listing.tools} == EXPECTED_TOOLS
     assert {t.name for t in stdio_listing.tools} == EXPECTED_TOOLS
 
