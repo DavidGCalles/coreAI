@@ -1,11 +1,13 @@
+import random
 from typing import Generic, TypeVar, Type, Optional, Sequence, Any
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, update, or_
 from sqlalchemy.sql import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.database import Base
 from src.db.models import Entity, Session, Message, Task, Event, LLMAudit, TaskStatus
+from src.managers.config_manager import config_manager
 from src.schemas.memory import DomainType
 
 # Definimos una variable de tipo vinculada a nuestra base declarativa de SQLAlchemy
@@ -68,6 +70,23 @@ class SessionRepository(BaseRepository[Session]):
 class MessageRepository(BaseRepository[Message]):
     def __init__(self, session: AsyncSession):
         super().__init__(Message, session)
+
+def _backoff_reintento(retry_count: int, config: dict[str, Any]) -> float:
+    """
+    Segundos de espera del próximo reintento (4.4-002 #104): exponencial
+    base·2^(n-1) con techo cap y jitter proporcional ±jitter.
+
+    Esto solo calcula el INTERVALO: el vencimiento real (available_at) lo
+    asigna Postgres (func.now(), consciente de zona) en retry_task — el reloj
+    que decide es el de la base de datos, no el del worker.
+    """
+    base = config["backoff_base_seconds"]
+    cap = config["backoff_cap_seconds"]
+    jitter = config["backoff_jitter"]
+    espera = min(cap, base * (2 ** (retry_count - 1)))
+    espera *= 1.0 + random.uniform(-jitter, jitter)
+    return max(espera, 0.0)
+
 
 class TaskRepository(BaseRepository[Task]):
     def __init__(self, session: AsyncSession):
@@ -140,6 +159,88 @@ class TaskRepository(BaseRepository[Task]):
         )
         await self.session.execute(stmt)
         await self.session.commit()
+
+    async def retry_task(self, task_id: UUID, error_msg: str) -> dict[str, Any] | None:
+        """
+        Fase 3 (Fallo transitorio, 4.4-002 #104): reintento con backoff o FAILED final.
+
+        Todo por UUID, sin instancias ORM (misma forma que fail_task — lección
+        del rollback #61). Si quedan reintentos (retry_count < max_retries):
+        +1, status vuelve a PENDING, available_at = now + backoff (el
+        vencimiento lo asigna Postgres con su propio reloj, consciente de
+        zona), y la traza appenda a error_history del payload — el payload
+        original viaja intacto. Agotados los reintentos: FAILED con la traza
+        final (la DLQ lógica del 4.4: FAILED + historial completo).
+
+        La tarea llega aquí RUNNING desde el único worker que la reclamó:
+        no hay carrera concurrente sobre la fila.
+
+        Devuelve el desenlace para el log del worker: {"outcome": "RETRY" |
+        "FAILED", "retry_count": int, "available_at": datetime | None}.
+        None si la fila no existe (el worker solo lo registra).
+        """
+        result = await self.session.execute(
+            select(Task.retry_count, Task.payload).where(Task.id == task_id)
+        )
+        fila = result.one_or_none()
+        if fila is None:
+            return None
+        retry_count = fila.retry_count or 0
+        current_payload = fila.payload
+
+        config = config_manager.get_retry_config()
+        max_retries = config["max_retries"]
+
+        # Historial append-only (4.4-002 #104): cada intento fallido deja su
+        # entrada con intento, instante y traza — la auditoría de la DLQ
+        # lógica y su lectura MCP (4.4-003) se apoyan aquí.
+        payload_copy = dict(current_payload) if isinstance(current_payload, dict) else {}
+        history = list(payload_copy.get("error_history", []))
+        history.append({
+            "attempt": retry_count + 1,
+            "at": datetime.now(timezone.utc).isoformat(),
+            "trace": error_msg,
+        })
+        payload_copy["error_history"] = history
+        payload_copy["error_trace"] = error_msg
+
+        if retry_count < max_retries:
+            nuevo_contador = retry_count + 1
+            espera = _backoff_reintento(nuevo_contador, config)
+            stmt = (
+                update(Task)
+                .where(Task.id == task_id)
+                .values({
+                    Task.status: TaskStatus.PENDING,
+                    Task.retry_count: nuevo_contador,
+                    Task.available_at: func.now() + timedelta(seconds=espera),
+                    Task.payload: payload_copy,
+                })
+                .returning(Task.available_at)
+            )
+            result = await self.session.execute(stmt)
+            await self.session.commit()
+            return {
+                "outcome": "RETRY",
+                "retry_count": nuevo_contador,
+                "available_at": result.scalar_one(),
+            }
+
+        # Reintentos agotados: FAILED con el historial completo y el payload
+        # original intacto para auditoría o reinyección manual (4.4-003).
+        # available_at se limpia: una FAILED no tiene vencimiento que cumplir.
+        stmt = (
+            update(Task)
+            .where(Task.id == task_id)
+            .values({
+                Task.status: TaskStatus.FAILED,
+                Task.available_at: None,
+                Task.payload: payload_copy,
+            })
+        )
+        await self.session.execute(stmt)
+        await self.session.commit()
+        return {"outcome": "FAILED", "retry_count": retry_count, "available_at": None}
 
     async def set_payload_fields(self, task_id: UUID, fields: dict[str, Any]) -> bool:
         """
