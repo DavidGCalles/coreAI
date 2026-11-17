@@ -2,7 +2,7 @@ import random
 from typing import Generic, TypeVar, Type, Optional, Sequence, Any
 from uuid import UUID
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import select, update, or_
+from sqlalchemy import select, update, or_, extract
 from sqlalchemy.sql import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.database import Base
@@ -241,6 +241,70 @@ class TaskRepository(BaseRepository[Task]):
         await self.session.execute(stmt)
         await self.session.commit()
         return {"outcome": "FAILED", "retry_count": retry_count, "available_at": None}
+
+    async def list_by_status(self, status: TaskStatus, limit: int) -> Sequence[Any]:
+        """
+        Listado read-only por estado (4.4-003 #105): la DLQ lógica del sistema
+        es status=FAILED, con su perfil de auditoría completo (retry_count,
+        error_history y edad) a la vista de la frontera.
+
+        Orden FIFO por created_at — una DLQ se trabaja de la más vieja a la
+        más nueva, como el claim. La edad la calcula el reloj de Postgres
+        (EXTRACT(EPOCH FROM now() - created_at)), el mismo que firma
+        available_at: la frontera no aporta su propio reloj (misma doctrina
+        que claim_next_task).
+
+        NO muta: solo un SELECT, sin commit — la sesión efímera del llamador
+        se cierra sola. Devuelve filas (Task, age_seconds) para que la
+        frontera arme el ítem sin exponer el payload crudo.
+        """
+        edad = extract("epoch", func.now() - Task.created_at).label("age_seconds")
+        stmt = (
+            select(Task, edad)
+            .where(Task.status == status)
+            .order_by(Task.created_at.asc())
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return result.all()
+
+    async def reinject_failed_task(self, task_id: UUID) -> dict[str, Any] | None:
+        """
+        Reinyección manual de una FAILED de la DLQ (4.4-003 #105): UPDATE
+        condicional → PENDING, retry_count=0, available_at=NULL (elegible YA
+        para el claim del worker).
+
+        El error_history del payload queda INTACTO (decisión de David, 17
+        nov): la reinyección resetea la mecánica de reintentos, no la
+        auditoría — quien necesita el porqué lo sigue teniendo en el
+        historial. Todo por UUID, sin instancias ORM (misma forma que
+        retry_task — lección del rollback #61).
+
+        La condición status=FAILED vive en el propio WHERE: la atomicidad es
+        la idempotencia — si el desenlace ya no es FAILED (el worker ganó la
+        carrera, o la tarea acaba de ser reinyectada), el rowcount es 0 y
+        NADIE aplica el reset dos veces sobre la misma fila.
+
+        Devuelve {"task_id", "session_id", "retry_count": 0} si reinyectó;
+        None si la fila no era reinyectable — el llamador distingue leyendo
+        el estado real antes de responder, nunca en silencio.
+        """
+        stmt = (
+            update(Task)
+            .where(Task.id == task_id, Task.status == TaskStatus.FAILED)
+            .values({
+                Task.status: TaskStatus.PENDING,
+                Task.retry_count: 0,
+                Task.available_at: None,
+            })
+            .returning(Task.session_id)
+        )
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        session_id = result.scalar_one_or_none()
+        if session_id is None:
+            return None
+        return {"task_id": task_id, "session_id": session_id, "retry_count": 0}
 
     async def set_payload_fields(self, task_id: UUID, fields: dict[str, Any]) -> bool:
         """

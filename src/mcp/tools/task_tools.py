@@ -4,9 +4,19 @@ from mcp.types import Tool, CallToolRequestParams
 from pydantic import ValidationError
 
 from src.db.database import AsyncSessionLocal
+from src.db.models import TaskStatus
 from src.repositories.relational import TaskRepository, SessionRepository, EntityRepository
 from src.managers.task_manager import TaskManager
-from src.schemas.tasks import TaskDispatchRequest, TaskGetRequest, TaskStatusResponse
+from src.schemas.tasks import (
+    TaskDispatchRequest,
+    TaskGetRequest,
+    TaskListItem,
+    TaskListRequest,
+    TaskListResponse,
+    TaskRetryRequest,
+    TaskRetryResponse,
+    TaskStatusResponse,
+)
 from src.contracts import task_contract_registry, contract_uri, CONTRACT_URI_TEMPLATE
 
 logger = logging.getLogger(__name__)
@@ -38,6 +48,29 @@ GET_TASK_TOOL_DESCRIPTION = (
     "memoria."
 )
 
+LIST_TASKS_TOOL_DESCRIPTION = (
+    "Listado read-only de tareas del Córtex Asíncrono por estado (cero "
+    "mutación). La DLQ lógica del sistema es el estado FAILED: tareas "
+    "legítimas que fallaron en ejecución y agotaron sus reintentos "
+    "automáticos. Cada ítem lleva retry_count, error_history (auditoría "
+    "intento a intento) y su edad, en orden FIFO (la más antigua primero) y "
+    "con límite (default 50, techo 200). Una FAILED se resuelve leyendo su "
+    "error_trace y error_history: si el fallo fue del sistema y ya está "
+    "corregido, reinyecta con coreai_retry_failed_task; si el problema es "
+    "el contenido, la reinyección solo pospondrá el mismo desenlace."
+)
+
+RETRY_FAILED_TASK_TOOL_DESCRIPTION = (
+    "Reinyección manual de una tarea FAILED de la DLQ: vuelve a PENDING "
+    "con retry_count=0 y disponible YA (available_at=NULL) — el worker la "
+    "reclamará como si acabara de entrar. SOLO FAILED es reinyectable: "
+    "cualquier otro estado es un error explícito, nunca silencio. El "
+    "error_history queda intacto: la reinyección resetea la mecánica de "
+    "reintentos, no la auditoría. Reinyectar NO garantiza éxito: si la "
+    "causa del fallo sigue viva, la tarea recorrerá de nuevo sus "
+    "reintentos hasta volver a la DLQ."
+)
+
 def get_task_tools() -> list[Tool]:
     """Devuelve la lista de herramientas de tareas para el registro central."""
     return [
@@ -50,6 +83,16 @@ def get_task_tools() -> list[Tool]:
             name="coreai_get_task",
             description=GET_TASK_TOOL_DESCRIPTION,
             inputSchema=TaskGetRequest.model_json_schema()
+        ),
+        Tool(
+            name="coreai_list_tasks",
+            description=LIST_TASKS_TOOL_DESCRIPTION,
+            inputSchema=TaskListRequest.model_json_schema()
+        ),
+        Tool(
+            name="coreai_retry_failed_task",
+            description=RETRY_FAILED_TASK_TOOL_DESCRIPTION,
+            inputSchema=TaskRetryRequest.model_json_schema()
         )
     ]
 
@@ -191,4 +234,117 @@ async def handle_task_tool(name: str, arguments: dict) -> dict:
             logger.error("Fallo interno del motor de tareas: %s", e)
             return {"content": [{"type": "text", "text": f"Fallo estructural: {str(e)}"}], "isError": True}
     
+    # =================================================================
+    # coreai_list_tasks (4.4-003, #105): listado read-only por estado.
+    # La DLQ lógica es status=FAILED con su perfil de auditoría a la vista.
+    # =================================================================
+    if name == "coreai_list_tasks":
+        try:
+            request_data = TaskListRequest.model_validate(arguments)
+        except Exception as e:
+            logger.error("Argumentos malformados en list_tasks: %s", e)
+            return {"content": [{"type": "text", "text": f"Error de validación: {str(e)}"}], "isError": True}
+
+        try:
+            async with AsyncSessionLocal() as session:
+                task_repo = TaskRepository(session)
+                rows = await task_repo.list_by_status(
+                    TaskStatus(request_data.status), request_data.limit
+                )
+
+                items = []
+                for task, age_seconds in rows:
+                    # task_type, error_trace y error_history viven dentro del
+                    # JSONB payload (los inyectan TaskManager y fail_task):
+                    # extracción defensiva, mismo patrón que coreai_get_task.
+                    payload = task.payload if isinstance(task.payload, dict) else {}
+                    history = payload.get("error_history")
+                    if not isinstance(history, list):
+                        history = []
+                    items.append(
+                        TaskListItem(
+                            task_id=task.id,
+                            session_id=task.session_id,
+                            task_type=payload.get("task_type"),
+                            status=task.status.value,
+                            retry_count=task.retry_count or 0,
+                            error_trace=payload.get("error_trace"),
+                            error_history=history,
+                            created_at=task.created_at,
+                            updated_at=task.updated_at,
+                            age_seconds=int(age_seconds),
+                        )
+                    )
+
+                response = TaskListResponse(
+                    status=request_data.status,
+                    count=len(items),
+                    tasks=items,
+                )
+                # Read-only estricto: solo un SELECT cruzó la frontera; la
+                # sesión efímera se cierra sin commit ni flush de escritura.
+                return {
+                    "content": [{"type": "text", "text": response.model_dump_json(indent=2)}],
+                    "isError": False
+                }
+        except Exception as e:
+            logger.error("Fallo interno en el listado de tareas: %s", e)
+            return {"content": [{"type": "text", "text": f"Fallo estructural: {str(e)}"}], "isError": True}
+
+    # =================================================================
+    # coreai_retry_failed_task (4.4-003, #105): reinyección manual de una
+    # FAILED de la DLQ — vuelve a PENDING desde cero.
+    # =================================================================
+    if name == "coreai_retry_failed_task":
+        try:
+            request_data = TaskRetryRequest.model_validate(arguments)
+        except Exception as e:
+            logger.error("Argumentos malformados en retry_failed_task: %s", e)
+            return {"content": [{"type": "text", "text": f"Error de validación: {str(e)}"}], "isError": True}
+
+        try:
+            async with AsyncSessionLocal() as session:
+                task_repo = TaskRepository(session)
+                desenlace = await task_repo.reinject_failed_task(request_data.task_id)
+
+                if desenlace is None:
+                    # Distinción honesta (4.4-003, #105): fila inexistente vs
+                    # estado no reinyectable — el error dice cuál es cuál.
+                    task = await task_repo.get(request_data.task_id)
+                    if task is None:
+                        logger.warning("Reinyección de tarea inexistente: %s", request_data.task_id)
+                        text = (
+                            f"La tarea {request_data.task_id} no existe. "
+                            "No hay fila con ese task_id: verifica que el UUID "
+                            "venga de coreai_list_tasks o coreai_get_task."
+                        )
+                    else:
+                        status = task.status.value if hasattr(task.status, "value") else str(task.status)
+                        logger.warning(
+                            "Reinyección rechazada: la tarea %s está en estado %s",
+                            request_data.task_id, status,
+                        )
+                        text = (
+                            f"La tarea {request_data.task_id} está en estado {status}: "
+                            "solo una FAILED de la DLQ es reinyectable. "
+                            "Una tarea viva no necesita reinyección — consulta su "
+                            "estado con coreai_get_task."
+                        )
+                    return {"content": [{"type": "text", "text": text}], "isError": True}
+
+                response = TaskRetryResponse(
+                    task_id=desenlace["task_id"],
+                    session_id=desenlace["session_id"],
+                    status="PENDING",
+                    retry_count=desenlace["retry_count"],
+                    available_at=None,
+                )
+                return {
+                    "content": [{"type": "text", "text": response.model_dump_json(indent=2)}],
+                    "isError": False
+                }
+        except Exception as e:
+            logger.error("Fallo interno en la reinyección de tarea: %s", e)
+            return {"content": [{"type": "text", "text": f"Fallo estructural: {str(e)}"}], "isError": True}
+
     raise ValueError(f"Herramienta {name} no es gestionada por task_tools.")
