@@ -130,7 +130,11 @@ async def test_tarea_desaparecida_no_revienta(fake_logger):
 async def test_runtimeerror_es_transitorio():
     """Excepción genérica de ejecución: no está en el catálogo determinista → reintenta."""
     repo = await _resolver(
-        FakeRepo(desenlace={"outcome": "RETRY", "retry_count": 1}),
+        FakeRepo(desenlace={
+            "outcome": "RETRY",
+            "retry_count": 1,
+            "available_at": "2026-11-17T12:00:00+00:00",  # contrato completo: el worker la loguea
+        }),
         RuntimeError("boom"),
     )
 
