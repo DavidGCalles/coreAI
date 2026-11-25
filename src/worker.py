@@ -90,7 +90,7 @@ async def garantia_arranque() -> None:
         except Exception as init_error:
             logger.error(
                 "No se pudo garantizar el esquema relacional: %s — reintento en %.1fs",
-                init_error, boot_backoff,
+                f"{type(init_error).__name__}: {init_error}", boot_backoff,
             )
             await asyncio.sleep(boot_backoff)
             boot_backoff = min(boot_backoff * 2, MAX_BACKOFF)
@@ -110,7 +110,9 @@ async def garantia_arranque() -> None:
         except Exception as init_error:
             logger.error(
                 "No se pudo garantizar las colecciones Qdrant: %s — reintento en %.1fs",
-                init_error, boot_backoff,
+                # Trace honesto (lección #61): clase + mensaje — un timeout
+                # de Qdrant llega con str() vacío y el log salía mudo.
+                f"{type(init_error).__name__}: {init_error}", boot_backoff,
             )
             await asyncio.sleep(boot_backoff)
             boot_backoff = min(boot_backoff * 2, MAX_BACKOFF)

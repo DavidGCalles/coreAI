@@ -2,6 +2,11 @@ import uuid
 import logging
 from typing import Any
 from qdrant_client import AsyncQdrantClient, models
+
+try:
+    from qdrant_client.http.exceptions import UnexpectedResponse
+except ImportError:  # la ruta del client ha variado entre versiones
+    from qdrant_client.http.api_exceptions import UnexpectedResponse  # type: ignore
 from src.schemas.memory import DomainType, MemorySearchFilters
 
 logger = logging.getLogger(__name__)
@@ -74,20 +79,36 @@ class VectorRepository:
         """
         existentes = {c.name for c in (await self.client.get_collections()).collections}
         if collection_name not in existentes:
-            await self.client.create_collection(
-                collection_name=collection_name,
-                vectors_config=models.VectorParams(
-                    size=vector_size,
-                    distance=distance,
-                ),
-            )
-            logger.info(
-                "Colección '%s' creada (%d dims, %s)",
-                collection_name, vector_size, distance,
-            )
-            return
+            try:
+                await self.client.create_collection(
+                    collection_name=collection_name,
+                    vectors_config=models.VectorParams(
+                        size=vector_size,
+                        distance=distance,
+                    ),
+                )
+                logger.info(
+                    "Colección '%s' creada (%d dims, %s)",
+                    collection_name, vector_size, distance,
+                )
+                return
+            except UnexpectedResponse as e:
+                # BUG-011 #107: en el boot entero, worker y core-mcp corren el
+                # mismo ensure a la vez y el vecino puede meter la colección
+                # ENTRE nuestro snapshot (get_collections) y nuestro create.
+                # El 409 es la señal idempotente de esa carrera, NO un fallo:
+                # cae a la MISMA validación de topología que lo preexistente.
+                # Cualquier otro status sube (un 500 no es idempotencia).
+                if e.status_code != 409:
+                    raise
+                logger.info(
+                    "Colección '%s' creada concurrentemente por otro arranque "
+                    "(409) — re-validando topología",
+                    collection_name,
+                )
 
-        # Existe: validar la topología ANTES de aceptar tráfico (BUG-001 #34)
+        # Existe (o acaba de crearla el vecino): validar la topología ANTES
+        # de aceptar tráfico (BUG-001 #34)
         info = await self.client.get_collection(collection_name=collection_name)
         vectors = info.config.params.vectors
         if isinstance(vectors, dict) or vectors is None or vectors.size != vector_size or vectors.distance != distance:

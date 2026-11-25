@@ -241,7 +241,7 @@ async def bootstrap_schema_with_backoff() -> None:
         except Exception as schema_error:
             logger.error(
                 "No se pudo garantizar el esquema relacional: %s — reintento en %.1fs",
-                schema_error, backoff,
+                f"{type(schema_error).__name__}: {schema_error}", backoff,
             )
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
@@ -276,7 +276,8 @@ async def bootstrap_collections_with_backoff() -> None:
         except Exception as collections_error:
             logger.error(
                 "No se pudo garantizar la topología vectorial: %s — reintento en %.1fs",
-                collections_error, backoff,
+                # Trace honesto (lección #61): clase + mensaje en el reintento.
+                f"{type(collections_error).__name__}: {collections_error}", backoff,
             )
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30.0)

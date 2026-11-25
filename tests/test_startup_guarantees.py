@@ -17,7 +17,13 @@ import src.main as main_module
 import src.worker as worker_module
 from src.db import vector_db
 from src.db.vector_db import close_qdrant_client, ensure_collections
-from src.repositories.vector import IMAGE_COLLECTION
+from src.repositories.vector import (
+    IMAGE_COLLECTION,
+    TEXT_VECTOR_SIZE,
+    TEXT_VECTOR_DISTANCE,
+    UnexpectedResponse,
+    VectorRepository,
+)
 from src.schemas.memory import DomainType
 
 
@@ -183,3 +189,62 @@ async def test_worker_garantia_arranque_esquema_primero(monkeypatch):
     assert orden == ["esquema", "esquema", "colecciones"]
     assert intentos == {"esquema": 2, "colecciones": 1}
     assert sleeps == [1.0]
+
+
+class QdrantConCarrera(FakeQdrantClient):
+    """
+    Boot entero (hallazgo del review de David, 25 nov): otro proceso crea la
+    colección ENTRE nuestro get_collections y nuestro create_collection —
+    Qdrant responde 409 con la colección ya existiendo y con la topología
+    correcta.
+    """
+
+    def __init__(self, la_que_choca):
+        super().__init__()
+        self.la_que_choca = la_que_choca
+
+    async def create_collection(self, collection_name, vectors_config):
+        await super().create_collection(collection_name, vectors_config)
+        if collection_name == self.la_que_choca:
+            # El create nuestro llega tarde: la colección existe (la creó el
+            # vecino) y Qdrant contesta 409.
+            raise UnexpectedResponse(409)
+
+
+@pytest.mark.asyncio
+async def test_ensure_collections_409_de_carrera_converge_limpio(monkeypatch):
+    """
+    BUG-011 #107: la idempotencia absorbe la concurrencia del boot entero.
+    El 409 del vecino es SEÑAL, no error: se re-valida la topología y el
+    arranque termina en verde sin un solo ERROR en el log.
+    """
+    fake = QdrantConCarrera("document")
+
+    async def fake_get():
+        return fake
+
+    monkeypatch.setattr(vector_db, "get_qdrant_client", fake_get)
+
+    await ensure_collections()
+
+    esperadas = {domain.value for domain in DomainType} | {IMAGE_COLLECTION}
+    assert set(fake.vectors_config) == esperadas
+
+
+@pytest.mark.asyncio
+async def test_ensure_collection_relanza_lo_que_no_es_409():
+    """Un 500 de Qdrant NO es señal idempotente: sube como siempre."""
+    fake = FakeQdrantClient()
+
+    async def create_que_revienta(collection_name, vectors_config):
+        raise UnexpectedResponse(500)
+
+    fake.create_collection = create_que_revienta
+
+    repo = VectorRepository(client=fake)
+    with pytest.raises(UnexpectedResponse):
+        await repo.ensure_collection(
+            collection_name="document",
+            vector_size=TEXT_VECTOR_SIZE,
+            distance=TEXT_VECTOR_DISTANCE,
+        )
