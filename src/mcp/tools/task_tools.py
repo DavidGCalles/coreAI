@@ -3,9 +3,12 @@ import logging
 from mcp.types import Tool, CallToolRequestParams
 from pydantic import ValidationError
 
+from sqlalchemy import select
+
 from src.db.database import AsyncSessionLocal
-from src.db.models import TaskStatus
-from src.repositories.relational import TaskRepository, SessionRepository, EntityRepository
+from src.db.entities_config import SYSTEM_DEFAULT_SLUG
+from src.db.models import Entity, TaskStatus
+from src.repositories.relational import TaskRepository, SessionRepository
 from src.managers.task_manager import TaskManager
 from src.schemas.tasks import (
     TaskDispatchRequest,
@@ -31,7 +34,14 @@ DISPATCH_TOOL_DESCRIPTION = (
     "task_type tiene un contrato de payload que se valida aquí de forma "
     "síncrona: si el payload viola el contrato, la llamada falla con isError y "
     "el contrato inline — clase de fallo NO reintentable (no esperes que "
-    "reintentar lo arregle; corrige el payload). Catálogo de contratos: "
+    "reintentar lo arregle; corrige el payload). Identidad (ADR-012-002): "
+    "el argumento opcional 'entity' declara quién despacha, con el slug con "
+    "el que vive registrado en el despliegue; la frontera lo resuelve y la "
+    "respuesta devuelve SIEMPRE la entity_id resuelta (system_default "
+    "explícito si no declaras ninguna). Un slug declarado y no registrado "
+    "rebota aquí mismo con el catálogo de entidades válidas: mismo fallo "
+    "determinista que el contrato, la tarea no se crea y reintentar no "
+    "sirve. Catálogo de contratos: "
     + CONTRACT_URI_TEMPLATE
 )
 
@@ -119,6 +129,26 @@ def _format_contract_violation(task_type, error: ValidationError) -> str:
         + f"Contrato del tipo: {contract_uri(task_type)}. "
         f"Esquema del contrato: {schema_inline}"
         f"Corrige el task_payload para cumplir la esquema y reintenta el dispatch."
+    )
+
+def _format_unregistered_entity(declared: str, valid_slugs: list[str]) -> str:
+    """
+    Error autónomo de la frontera de identidad (ADR-012-002, #113): el slug
+    declarado no vive en el registro del despliegue (ADR-012-001, el
+    oráculo). Veneno determinista — misma familia de fallo que la
+    validación de forma del ADR-006: reintentar el mismo argumento no sirve.
+    """
+    catalogo = ", ".join(valid_slugs) or "ninguna"
+    return (
+        f"La entidad declarada '{declared}' no está registrada en este "
+        f"despliegue. La identidad se gobierna en el despliegue (YAML "
+        f"montado + bootstrap, ADR-012-001): un slug declarado y no "
+        f"registrado es veneno determinista, no un fallo transitorio. "
+        f"La tarea NO se encoló: cero filas nuevas en tasks y ninguna sesión "
+        f"o entidad auto-vivificada para este intento. "
+        f"Entidades registradas: {catalogo}. "
+        f"Corrige el slug, declara la entidad en el fichero del despliegue, "
+        f"o despacha sin 'entity' (system_default implícito)."
     )
 
 async def handle_task_tool(name: str, arguments: dict) -> dict:
@@ -218,14 +248,79 @@ async def handle_task_tool(name: str, arguments: dict) -> dict:
         # 2. Inyección transaccional con sesión efímera
         try:
             async with AsyncSessionLocal() as session:
+                # 2.1 Frontera de identidad (ADR-012-002, #113): la misma
+                #     frontera que valida la forma resuelve QUIÉN despacha,
+                #     contra el registro del despliegue (ADR-012-001, el
+                #     oráculo). El veneno (D4) aplica por igual a TODAS las
+                #     task types: la frontera es una sola.
+                declarada = (
+                    request_data.entity if request_data.entity is not None
+                    else SYSTEM_DEFAULT_SLUG
+                )
+                result = await session.execute(
+                    select(Entity).where(Entity.slug == declarada)
+                )
+                resolved_entity = result.scalar_one_or_none()
+
+                if resolved_entity is None:
+                    if request_data.entity is None:
+                        # system_default ausente NO es veneno: es fallo
+                        # estructural — el bootstrap del ADR-012-001
+                        # garantiza el implícito y aquí solo se llega con
+                        # un despliegue que no completó su provisión.
+                        logger.error(
+                            "Fallo estructural: '%s' ausente del registro y el "
+                            "bootstrap del ADR-012-001 lo garantiza",
+                            SYSTEM_DEFAULT_SLUG,
+                        )
+                        return {
+                            "content": [{
+                                "type": "text",
+                                "text": (
+                                    "Fallo estructural: la identidad implícita "
+                                    f"'{SYSTEM_DEFAULT_SLUG}' no está registrada. "
+                                    "El bootstrap la garantiza al arranque "
+                                    "(ADR-012-001): la provisión de entidades de "
+                                    "este nodo no se completó — revisa el despliegue."
+                                )
+                            }],
+                            "isError": True
+                        }
+                    # Caso 2 (D4, ADR-012-002): declarada y NO registrada →
+                    # veneno determinista con catálogo inline (estilo
+                    # ADR-006). Todo read-only: nada se encoló y la sesión
+                    # efímera se cierra sin commit.
+                    catalog_result = await session.execute(
+                        select(Entity.slug)
+                        .where(Entity.slug.is_not(None))
+                        .order_by(Entity.slug.asc())
+                    )
+                    valid_slugs = [row[0] for row in catalog_result]
+                    logger.warning(
+                        "Dispatch rechazado por entidad no registrada: %s (válidas: %s)",
+                        request_data.entity, valid_slugs,
+                    )
+                    return {
+                        "content": [{
+                            "type": "text",
+                            "text": _format_unregistered_entity(
+                                request_data.entity, valid_slugs
+                            )
+                        }],
+                        "isError": True
+                    }
+
                 task_repo = TaskRepository(session)
                 session_repo = SessionRepository(session)
-                entity_repo = EntityRepository(session)
-                
-                manager = TaskManager(session, task_repo, session_repo, entity_repo)
-                response = await manager.dispatch_task(request_data)
-                
-                # Devolvemos el contrato de salida serializado. Vital para que el cliente lea el session_id autogenerado.
+
+                manager = TaskManager(session, task_repo, session_repo)
+                response = await manager.dispatch_task(
+                    request_data, entity_id=resolved_entity.id
+                )
+
+                # Contrato de salida serializado: el cliente lee el session_id
+                # autogenerado y la entity_id RESUELTA (ADR-012-002) — la
+                # resolución nunca es silenciosa.
                 return {
                     "content": [{"type": "text", "text": response.model_dump_json(indent=2)}],
                     "isError": False
