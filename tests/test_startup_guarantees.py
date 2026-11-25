@@ -191,6 +191,17 @@ async def test_worker_garantia_arranque_esquema_primero(monkeypatch):
     assert sleeps == [1.0]
 
 
+def _respuesta_inesperada(status_code: int) -> UnexpectedResponse:
+    """Constructor real del qdrant-client 1.19: los 4 posicionales son
+    obligatorios (status_code, reason_phrase, content, headers)."""
+    return UnexpectedResponse(
+        status_code,
+        "Conflict" if status_code == 409 else "Internal Server Error",
+        b'{"status":{"error":"Wrong input: Collection already exists!"}}',
+        {},
+    )
+
+
 class QdrantConCarrera(FakeQdrantClient):
     """
     Boot entero (hallazgo del review de David, 25 nov): otro proceso crea la
@@ -208,7 +219,7 @@ class QdrantConCarrera(FakeQdrantClient):
         if collection_name == self.la_que_choca:
             # El create nuestro llega tarde: la colección existe (la creó el
             # vecino) y Qdrant contesta 409.
-            raise UnexpectedResponse(409)
+            raise _respuesta_inesperada(409)
 
 
 @pytest.mark.asyncio
@@ -237,7 +248,7 @@ async def test_ensure_collection_relanza_lo_que_no_es_409():
     fake = FakeQdrantClient()
 
     async def create_que_revienta(collection_name, vectors_config):
-        raise UnexpectedResponse(500)
+        raise _respuesta_inesperada(500)
 
     fake.create_collection = create_que_revienta
 
