@@ -88,16 +88,16 @@ def test_loader_fichero_vacio_devuelve_lista_vacia(tmp_path):
 def test_loader_yaml_valido_preserva_orden_y_labels(tmp_path):
     path = tmp_path / "entities.yaml"
     path.write_text(
-        "entities:\n  - id: david\n    label: David Gómez\n  - id: elios-workshop\n",
+        "entities:\n  - id: coreai-worker\n    label: Lane worker\n  - id: coreai-cron\n",
         encoding="utf-8",
     )
     decls = load_entity_declarations(str(path))
-    assert [(d.id, d.label) for d in decls] == [("david", "David Gómez"), ("elios-workshop", None)]
+    assert [(d.id, d.label) for d in decls] == [("coreai-worker", "Lane worker"), ("coreai-cron", None)]
 
 
 def test_loader_raiz_lista_o_escalar_es_malformado(tmp_path):
     path = tmp_path / "entities.yaml"
-    path.write_text("- id: david\n", encoding="utf-8")
+    path.write_text("- id: coreai-worker\n", encoding="utf-8")
     with pytest.raises(EntitiesProvisionError, match="mapping"):
         load_entity_declarations(str(path))
     path.write_text("42\n", encoding="utf-8")
@@ -114,7 +114,7 @@ def test_loader_clave_desconocida_en_la_raiz_es_malformado(tmp_path):
 
 def test_loader_entities_no_lista_es_malformado(tmp_path):
     path = tmp_path / "entities.yaml"
-    path.write_text("entities:\n  david: {}\n", encoding="utf-8")
+    path.write_text("entities:\n  coreai-worker: {}\n", encoding="utf-8")
     with pytest.raises(EntitiesProvisionError, match="lista"):
         load_entity_declarations(str(path))
 
@@ -129,13 +129,13 @@ def test_loader_charset_del_id_validado(tmp_path):
     path = tmp_path / "entities.yaml"
     for malformed in [
         "entities:\n  - id: David\n",       # mayúsculas
-        "entities:\n  - id: 'david gomez'\n",  # espacio
-        "entities:\n  - id: david@correo\n",  # charset prohibido
+        "entities:\n  - id: 'coreai worker'\n",  # espacio
+        "entities:\n  - id: worker@correo\n",  # charset prohibido
         "entities:\n  - id: ''\n",          # vacío
         "entities:\n  - label: sin-id\n",   # id ausente
         "entities:\n  - id: 42\n",          # no string
         "entities:\n  - {}\n",             # entrada vacía
-        "entities:\n  - 'david'\n",         # entrada no mapping
+        "entities:\n  - 'coreai-worker'\n",         # entrada no mapping
     ]:
         path.write_text(malformed, encoding="utf-8")
         with pytest.raises(EntitiesProvisionError, match=str(path)):
@@ -148,7 +148,7 @@ def test_loader_id_y_label_demasiado_largos_son_malformados(tmp_path):
     with pytest.raises(EntitiesProvisionError, match="excede 64"):
         load_entity_declarations(str(path))
     path.write_text(
-        f"entities:\n  - id: david\n    label: {'l' * 256}\n", encoding="utf-8"
+        f"entities:\n  - id: coreai-worker\n    label: {'l' * 256}\n", encoding="utf-8"
     )
     with pytest.raises(EntitiesProvisionError, match="excede 255"):
         load_entity_declarations(str(path))
@@ -156,28 +156,28 @@ def test_loader_id_y_label_demasiado_largos_son_malformados(tmp_path):
 
 def test_loader_clave_desconocida_en_entrada_es_malformado(tmp_path):
     path = tmp_path / "entities.yaml"
-    path.write_text("entities:\n  - id: david\n    rol: user\n", encoding="utf-8")
+    path.write_text("entities:\n  - id: coreai-worker\n    rol: user\n", encoding="utf-8")
     with pytest.raises(EntitiesProvisionError, match="claves desconocidas"):
         load_entity_declarations(str(path))
 
 
 def test_loader_label_no_string_es_malformado(tmp_path):
     path = tmp_path / "entities.yaml"
-    path.write_text("entities:\n  - id: david\n    label: 42\n", encoding="utf-8")
+    path.write_text("entities:\n  - id: coreai-worker\n    label: 42\n", encoding="utf-8")
     with pytest.raises(EntitiesProvisionError, match="label debe ser un string"):
         load_entity_declarations(str(path))
 
 
 def test_loader_ids_duplicados_son_malformados(tmp_path):
     path = tmp_path / "entities.yaml"
-    path.write_text("entities:\n  - id: david\n  - id: david\n", encoding="utf-8")
+    path.write_text("entities:\n  - id: coreai-worker\n  - id: coreai-worker\n", encoding="utf-8")
     with pytest.raises(EntitiesProvisionError, match="duplicado"):
         load_entity_declarations(str(path))
 
 
 def test_loader_yaml_sintacticamente_roto_es_malformado(tmp_path):
     path = tmp_path / "entities.yaml"
-    path.write_text("entities: [ {id: david\n", encoding="utf-8")
+    path.write_text("entities: [ {id: coreai-worker\n", encoding="utf-8")
     with pytest.raises(EntitiesProvisionError, match="YAML inválido"):
         load_entity_declarations(str(path))
 
@@ -203,8 +203,8 @@ async def test_ensure_entities_clama_la_fila_legacy_e_inserta_en_orden():
     conn = _mock_conn(order)
 
     declarations = [
-        EntityDeclaration(id="david", label="David Gómez"),
-        EntityDeclaration(id="elios-workshop", label=None),
+        EntityDeclaration(id="coreai-worker", label="Lane worker"),
+        EntityDeclaration(id="coreai-cron", label=None),
     ]
     await ensure_entities(conn, declarations)
 
@@ -231,7 +231,7 @@ async def test_ensure_entities_roles_correctos_por_tipo_de_entidad():
     from src.db.entities_config import EntityDeclaration
 
     conn = _mock_conn([])
-    declarations = [EntityDeclaration(id="david", label=None)]
+    declarations = [EntityDeclaration(id="coreai-worker", label=None)]
     await ensure_entities(conn, declarations)
 
     stmts = [c.args[0] for c in conn.execute.await_args_list]
@@ -243,7 +243,7 @@ async def test_ensure_entities_roles_correctos_por_tipo_de_entidad():
     ]
     assert compiled_params[0]["slug"] == SYSTEM_DEFAULT_SLUG
     assert compiled_params[0]["role"] == SYSTEM_DEFAULT_ROLE
-    assert compiled_params[1]["slug"] == "david"
+    assert compiled_params[1]["slug"] == "coreai-worker"
     assert compiled_params[1]["role"] == DECLARED_ROLE
 
 
@@ -289,8 +289,8 @@ async def test_integracion_bd_limpia_con_dos_declaradas_y_idempotencia_exacta(
     """DoD: N arranques dejan la tabla idéntica (BD limpia)."""
     yaml_content = (
         "entities:\n"
-        "  - id: david\n    label: David Gómez\n"
-        "  - id: elios-workshop\n"
+        "  - id: coreai-worker\n    label: Lane worker\n"
+        "  - id: coreai-cron\n"
     )
     _apuntar_entities_file(monkeypatch, tmp_path, yaml_content)
 
@@ -298,10 +298,10 @@ async def test_integracion_bd_limpia_con_dos_declaradas_y_idempotencia_exacta(
     await ensure_relational_schema()
 
     primera = await _slugs_presentes()
-    assert set(primera) == {"system_default", "david", "elios-workshop"}
+    assert set(primera) == {"system_default", "coreai-worker", "coreai-cron"}
     assert primera["system_default"][0] == SYSTEM_DEFAULT_ROLE
-    assert primera["david"] == (DECLARED_ROLE, "David Gómez", primera["david"][2])
-    assert primera["elios-workshop"][0] == DECLARED_ROLE
+    assert primera["coreai-worker"] == (DECLARED_ROLE, "Lane worker", primera["coreai-worker"][2])
+    assert primera["coreai-cron"][0] == DECLARED_ROLE
 
     # Idempotencia exacta: mismos UUIDs tras re-garantizar (dos veces más).
     await ensure_relational_schema()
@@ -393,27 +393,27 @@ async def test_integracion_reclama_la_fila_legacy_y_no_toca_a_los_demas(monkeypa
 async def test_integracion_aditividad_quitar_entidad_del_yaml_no_la_borra(monkeypatch, tmp_path):
     """DoD: nada UPDATEa ni borra filas declaradas preexistentes; quitar una
     entidad del YAML la deja viva (solo deja de garantizarse)."""
-    _apuntar_entities_file(monkeypatch, tmp_path, "entities:\n  - id: david\n")
+    _apuntar_entities_file(monkeypatch, tmp_path, "entities:\n  - id: coreai-worker\n")
 
     await _limpiar_entidades()
     await ensure_relational_schema()
 
-    david_id = (await _slugs_presentes())["david"][2]
+    worker_id = (await _slugs_presentes())["coreai-worker"][2]
 
-    # Nueva realidad del despliegue: el YAML ya no declara a david.
+    # Nueva realidad del despliegue: el YAML ya no declara a coreai-worker.
     _apuntar_entities_file(monkeypatch, tmp_path, "entities: []\n")
     await ensure_relational_schema()
 
     presentes = await _slugs_presentes()
-    assert "david" in presentes  # sigue viva: la provisión jamás borra
-    assert presentes["david"][2] == david_id  # ni se toca: mismo UUID
+    assert "coreai-worker" in presentes  # sigue viva: la provisión jamás borra
+    assert presentes["coreai-worker"][2] == worker_id  # ni se toca: mismo UUID
 
 
 async def test_integracion_dos_arranques_no_duplican_jamas(monkeypatch, tmp_path):
     """El índice unique de slug + ON CONFLICT DO NOTHING hacen imposible la
     duplicación: dos arranques declarando lo mismo dejan exactamente las
     mismas filas. Idempotencia puntual del INSERT, DoD del issue."""
-    _apuntar_entities_file(monkeypatch, tmp_path, "entities:\n  - id: david\n")
+    _apuntar_entities_file(monkeypatch, tmp_path, "entities:\n  - id: coreai-worker\n")
 
     await _limpiar_entidades()
     await ensure_relational_schema()
@@ -425,4 +425,4 @@ async def test_integracion_dos_arranques_no_duplican_jamas(monkeypatch, tmp_path
         total = (
             await conn.execute(text("SELECT COUNT(*) FROM entities"))
         ).scalar()
-    assert total == 2  # system_default + david, ni uno más
+    assert total == 2  # system_default + coreai-worker, ni uno más

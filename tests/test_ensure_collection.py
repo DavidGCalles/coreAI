@@ -188,7 +188,7 @@ async def test_worker_boot_creates_all_collections_on_clean_deploy(monkeypatch):
     monkeypatch.setattr("src.db.vector_db.get_qdrant_client", AsyncMock(return_value=client))
     # Seam corregido: tras el BUG-011 (#118) el worker ya NO importa el
     # cliente — la garantía es ensure_collections y el singleton vive en
-    # src.db.vector_db (donde se resuelve en runtime: ahí se parchea.
+    # src.db.vector_db (donde se resuelve en runtime: ahí se parchea)
 
     await ensure_collections()
 
@@ -214,7 +214,7 @@ async def test_worker_boot_idempotent_with_full_valid_topology(monkeypatch):
     monkeypatch.setattr("src.db.vector_db.get_qdrant_client", AsyncMock(return_value=client))
     # Seam corregido: tras el BUG-011 (#118) el worker ya NO importa el
     # cliente — la garantía es ensure_collections y el singleton vive en
-    # src.db.vector_db (donde se resuelve en runtime: ahí se parchea.
+    # src.db.vector_db (donde se resuelve en runtime: ahí se parchea)
 
     await ensure_collections()
 
@@ -234,7 +234,7 @@ async def test_worker_boot_fails_loud_on_wrong_text_dims(monkeypatch):
     monkeypatch.setattr("src.db.vector_db.get_qdrant_client", AsyncMock(return_value=client))
     # Seam corregido: tras el BUG-011 (#118) el worker ya NO importa el
     # cliente — la garantía es ensure_collections y el singleton vive en
-    # src.db.vector_db (donde se resuelve en runtime: ahí se parchea.
+    # src.db.vector_db (donde se resuelve en runtime: ahí se parchea)
 
     with pytest.raises(ValueError) as exc_info:
         await ensure_collections()
