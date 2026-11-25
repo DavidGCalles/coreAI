@@ -9,58 +9,13 @@ from src.logging_config import configure_logging, set_current_task_id, clear_cur
 from src.managers.config_manager import config_manager
 from src.workers.task_router import route_task
 from src.workers.failure_classification import es_fallo_determinista
-from src.schemas.memory import DomainType
-from src.db.vector_db import get_qdrant_client
-from src.repositories.vector import (
-    VectorRepository,
-    IMAGE_COLLECTION,
-    IMAGE_VECTOR_SIZE,
-    IMAGE_VECTOR_DISTANCE,
-    TEXT_VECTOR_SIZE,
-    TEXT_VECTOR_DISTANCE,
-)
+from src.db.vector_db import ensure_collections
 
 configure_logging(level=config_manager.get_app_config()["log_level"])
 logger = logging.getLogger("coreai-worker")
 
 INITIAL_BACKOFF = 1.0
 MAX_BACKOFF = 30.0
-
-
-async def ensure_collections() -> None:
-    """
-    Garantía idempotente de TODAS las colecciones derivadas del sistema
-    (ADR-007-002 #50; BUG-001 #34).
-
-    La colección de imágenes se creó a mano en su día: nada garantizaba su
-    existencia en un despliegue limpio, y el handler moría asíncrono contra
-    una colección inexistente. Las colecciones de TEXTO por dominio
-    (document, conversation, system — multilingual-e5-small, 384 dims,
-    coseno) tenían el mismo agujero hasta el BUG-001: un `docker-compose
-    down -v` seguido de arranque limpio las auto-genera TODAS sin
-    intervención manual, y el arranque es idempotente (comparación de
-    nombres, nunca try/except). Si una colección preexistente trae dims
-    de otro modelo, el arranque revienta explícito — la topología se
-    valida ANTES de aceptar tráfico, no tarea a tarea en el upsert.
-    """
-    client = await get_qdrant_client()
-    repo = VectorRepository(client=client)
-
-    # Colecciones de texto: una por cada dominio del catálogo (BUG-001 #34),
-    # mismas dims que el embedding de texto que genera _get_embedding.
-    for domain in DomainType:
-        await repo.ensure_collection(
-            collection_name=domain.value,
-            vector_size=TEXT_VECTOR_SIZE,
-            distance=TEXT_VECTOR_DISTANCE,
-        )
-
-    # Colección de imágenes (jina-clip-v2, 1024 dims — ADR-007-002 #50).
-    await repo.ensure_collection(
-        collection_name=IMAGE_COLLECTION,
-        vector_size=IMAGE_VECTOR_SIZE,
-        distance=IMAGE_VECTOR_DISTANCE,
-    )
 
 
 async def _resolver_fallo(repo: TaskRepository, task_id: UUID, error: Exception) -> None:

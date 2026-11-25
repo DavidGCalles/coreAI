@@ -15,6 +15,7 @@ from src.mcp.tools.task_tools import get_task_tools, handle_task_tool
 from src.mcp.tools.recall_tools import get_recall_tools, handle_recall_tool
 from src.mcp.resources.contract_resources import get_contract_resources, read_contract_resource
 from src.db.bootstrap import ensure_relational_schema
+from src.db.vector_db import ensure_collections, close_qdrant_client
 from src.db.database import engine
 
 from pydantic import BaseModel, ConfigDict
@@ -246,6 +247,41 @@ async def bootstrap_schema_with_backoff() -> None:
             backoff = min(backoff * 2, 30.0)
 
 
+async def bootstrap_collections_with_backoff() -> None:
+    """
+    BUG-011 #107: garantía de la topología vectorial al arranque de core-mcp.
+    Hasta ahora la garantizaba solo el worker (BUG-001 #34), así que este
+    proceso asumía que el otro ya había creado las colecciones — un recall
+    contra un Qdrant limpio sin worker moría con MissingCollectionError.
+
+    Trampa del event loop (DECISIÓN documentada, gemelo del fix del pool
+    asyncpg del BUG-010): este bootstrap corre en un event loop efímero
+    (asyncio.run en main) que se cierra antes de servir, y el cliente Qdrant
+    es un singleton global que retiene estado del loop donde nace. Había
+    dos salidas: disponer el cliente dentro de este loop efímero, o mover
+    ambas garantías al loop de serving (lifespan de uvicorn/stdio,
+    enganchando al lifecycle del SDK en cada transporte). Elección:
+    disponer — close_qdrant_client() cierra el cliente y resetea el
+    singleton DENTRO de este loop, antes de que asyncio.run lo cierre,
+    exactamente como el engine.dispose() del bootstrap relacional. El
+    loop de serving recrea el cliente lazy en el primer recall.
+    """
+    backoff = 1.0
+    while True:
+        try:
+            await ensure_collections()
+            await close_qdrant_client()
+            logger.info("Arranque: topología vectorial garantizada (BUG-011 #107)")
+            return
+        except Exception as collections_error:
+            logger.error(
+                "No se pudo garantizar la topología vectorial: %s — reintento en %.1fs",
+                collections_error, backoff,
+            )
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Frontera MCP de coreAI: mismo server, STDIO y streamable HTTP."
@@ -269,8 +305,17 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # BUG-010 #87: esquema garantizado antes de servir, en los tres transportes.
-    asyncio.run(bootstrap_schema_with_backoff())
+    # BUG-010 #87 + BUG-011 #107: esquema relacional y topología vectorial
+    # garantizados antes de servir, en los tres transportes. Cada proceso
+    # garantiza TODO el sustrato que va a tocar: nadie asume que el vecino
+    # ya arrancó. Mismo asyncio.run efímero → los invariantes de loop se
+    # cierran dentro (engine.dispose + close_qdrant_client): el serving
+    # arranca con el pool vacío y el cliente Qdrant por recrear lazy.
+    async def _bootstrap_sustrato() -> None:
+        await bootstrap_schema_with_backoff()
+        await bootstrap_collections_with_backoff()
+
+    asyncio.run(_bootstrap_sustrato())
 
     if args.serving == "http":
         run_http(args.host, args.port)
