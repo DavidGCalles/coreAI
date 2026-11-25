@@ -3,6 +3,7 @@ import logging
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.database import AsyncSessionLocal
+from src.db.bootstrap import ensure_relational_schema
 from src.repositories.relational import TaskRepository
 from src.logging_config import configure_logging, set_current_task_id, clear_current_task_id
 from src.managers.config_manager import config_manager
@@ -101,13 +102,48 @@ async def _resolver_fallo(repo: TaskRepository, task_id: UUID, error: Exception)
         )
 
 
-async def worker_loop():
+async def garantia_arranque() -> None:
+    """
+    ARRANQUE (BUG-011 #107): el worker garantiza TODO el sustrato que va a
+    tocar antes de consumir la cola — esquema relacional Y topología
+    vectorial. Hasta ahora cada proceso asumía que el otro ya había
+    arrancado (el esquema lo garantizaba solo core-mcp, BUG-010 #87; las
+    colecciones solo este worker, BUG-001 #34): un worker solo contra una
+    BD limpia reclamaba en bucle de error de infra hasta que el otro
+    arrancara.
+
+    Orden: esquema primero — el claim es lo primero que toca el bucle.
+
+    Sin engine.dispose() tras el ensure_relacional_schema: ese cierre
+    existe en core-mcp porque SU bootstrap corre en un event loop efímero
+    que se cierra antes de servir; el worker vive entero en UN solo loop
+    (asyncio.run(worker_loop())), así que las conexiones de pool creadas
+    por el bootstrap siguen válidas para el bucle entero.
+    """
     # =================================================================
-    # ARRANQUE: garantía de colecciones con backoff (ADR-007-002 #50,
-    # BUG-001 #34). Qdrant puede estar todavía levantándose (el worker
-    # no declara depends_on sobre él): no morimos por orden de arranque
-    # — reintentamos con el mismo backoff que el bucle. Pero NO
-    # consumimos la cola hasta que la topología completa esté
+    # Esquema relacional con backoff (BUG-011 #107). Postgres puede estar
+    # todavía levantándose: no morimos por orden de arranque — y NO
+    # consumimos la cola hasta tener el esquema garantizado (el claim de
+    # una BD limpia y sin core-mcp revienta en bucle de error de infra).
+    # =================================================================
+    boot_backoff = INITIAL_BACKOFF
+    while True:
+        try:
+            await ensure_relational_schema()
+            logger.info("Esquema relacional garantizado al arranque (BUG-011 #107)")
+            break
+        except Exception as init_error:
+            logger.error(
+                "No se pudo garantizar el esquema relacional: %s — reintento en %.1fs",
+                init_error, boot_backoff,
+            )
+            await asyncio.sleep(boot_backoff)
+            boot_backoff = min(boot_backoff * 2, MAX_BACKOFF)
+
+    # =================================================================
+    # Colecciones con backoff (ADR-007-002 #50, BUG-001 #34). Qdrant puede
+    # estar todavía levantándose (el worker no declara depends_on sobre
+    # él). Pero NO se consume la cola hasta que la topología completa esté
     # garantizada y validada.
     # =================================================================
     boot_backoff = INITIAL_BACKOFF
@@ -123,6 +159,11 @@ async def worker_loop():
             )
             await asyncio.sleep(boot_backoff)
             boot_backoff = min(boot_backoff * 2, MAX_BACKOFF)
+
+
+async def worker_loop():
+    # Ninguna reclamación antes de tener el sustrato garantizado (BUG-011 #107).
+    await garantia_arranque()
 
     logger.info("Córtex Asíncrono iniciado. A la escucha de tareas...")
     backoff = INITIAL_BACKOFF
