@@ -103,6 +103,18 @@ class Task(Base):
     __tablename__ = 'tasks'
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('sessions.id', ondelete='CASCADE'))
+
+    # Titularidad del despacho (ADR-012-002, #113): la entidad que la frontera
+    # resolvió al encolar — la DLQ de la 4.4 gana dueño sin tocar su superficie.
+    # Nullable por la regla aditiva (ADR-011): las filas históricas nacieron sin
+    # dueño y su regla de cierre (D1) vive en el #116. La FK aterriza completa
+    # en despliegues limpios (create_all); en un arranque con historia,
+    # ensure_columns añade la columna SIN la restricción — la integridad queda
+    # garantizada por construcción: la entity_id la resolvió la frontera contra
+    # el registro (ADR-012-001) o no se escribió fila alguna.
+    entity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('entities.id'), nullable=True
+    )
     
     status: Mapped[TaskStatus] = mapped_column(
         SQLEnum(
