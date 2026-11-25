@@ -15,6 +15,7 @@ from src.mcp.tools.task_tools import get_task_tools, handle_task_tool
 from src.mcp.tools.recall_tools import get_recall_tools, handle_recall_tool
 from src.mcp.resources.contract_resources import get_contract_resources, read_contract_resource
 from src.db.bootstrap import ensure_relational_schema
+from src.db.entities_config import EntitiesProvisionError
 from src.db.vector_db import ensure_collections, close_qdrant_client
 from src.db.database import engine
 
@@ -238,6 +239,15 @@ async def bootstrap_schema_with_backoff() -> None:
             await engine.dispose()
             logger.info("Arranque: esquema relacional garantizado (BUG-010 #87)")
             return
+        except EntitiesProvisionError as entities_error:
+            # [ADR-012-001] #112: provisión malformada = fallo DETERMINISTA de
+            # configuración — reintentar es reintentar el mismo fichero. Sin
+            # backoff: el arranque muere aquí, explícito y con fichero y razón.
+            logger.error(
+                "Provisión declarativa de entidades inválida, arranque abortado: %s",
+                entities_error,
+            )
+            raise
         except Exception as schema_error:
             logger.error(
                 "No se pudo garantizar el esquema relacional: %s — reintento en %.1fs",

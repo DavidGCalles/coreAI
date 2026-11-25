@@ -28,7 +28,21 @@ class Entity(Base):
     # Flexibilidad absoluta para configuraciones del nodo (RBAC, preferencias, keys)
     metadata_payload: Mapped[dict] = mapped_column(JSON, default={})
     
+    # [ADR-012-001] #112: identidad declarativa del despliegue. El slug es el
+    # discriminador de identidad del ADR-012 (el oráculo que consumirá la
+    # frontera); nullable por la regla aditiva (las filas históricas nacieron
+    # sin él y el bootstrap solo reclama la de system_default).
+    slug: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Etiqueta de presentación, opcional (vive en el YAML del despliegue).
+    label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        # [ADR-012-001] #112: discriminador único de identidad — el INSERT del
+        # bootstrap garantiza entidades con ON CONFLICT (slug) DO NOTHING.
+        Index('idx_entities_slug', 'slug', unique=True),
+    )
 
 class Session(Base):
     __tablename__ = 'sessions'

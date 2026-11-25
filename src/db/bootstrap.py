@@ -24,6 +24,13 @@ Pasos, todos idempotentes:
    índices para despliegues con historia: sin este paso, un índice declarado
    en models.py solo llegaría a los despliegues limpios (lección BUG-001/BUG-010:
    la garantía vive en el arranque, no en la memoria de quién despliega).
+6. Entidades declarativas (ADR-012-001 #112): carga del YAML del despliegue
+   (volumen de datos, jamás env — D2 del ADR-012) y INSERT ... ON CONFLICT
+   (slug) DO NOTHING por entidad + system_default implícito. Solo aditivo:
+   la tabla jamás se recorta (quitar una entidad del YAML no la borra). El
+   YAML se valida ANTES de tocar la BD: malformado = fallo DETERMINISTA de
+   arranque (EntitiesProvisionError, sin backoff); ausente o vacío =
+   arranque normal con solo system_default.
 
 Los SQLEnum(..., create_type=False) de models.py exigen que los tipos enum
 existan ANTES del create_all, así que enums y create_all van en una única
@@ -34,12 +41,22 @@ scripts/db/ permanece vetado.
 import logging
 
 from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.schema import CreateIndex
 
 from src.db.database import Base, engine
 import src.db.models  # noqa: F401 — registra las tablas en Base.metadata
+from src.db.entities_config import (
+    DECLARED_ROLE,
+    SYSTEM_DEFAULT_METADATA,
+    SYSTEM_DEFAULT_ROLE,
+    SYSTEM_DEFAULT_SLUG,
+    EntityDeclaration,
+    load_entity_declarations,
+)
 from src.db.models import SessionStatus, TaskStatus
+from src.managers.config_manager import config_manager
 from src.schemas.memory import DomainType, Visibility
 
 logger = logging.getLogger(__name__)
@@ -175,19 +192,73 @@ async def ensure_indexes(conn: AsyncConnection) -> None:
             logger.info("Índice garantizado: %s", index.name)
 
 
+async def ensure_entities(conn: AsyncConnection, declarations: list[EntityDeclaration]) -> None:
+    """
+    INSERT IF NOT EXISTS por entidad declarada + system_default implícito.
+
+    [ADR-012-001] #112: las entidades se gobiernan en el despliegue y el
+    bootstrap las garantiza — patrón ensure_* del ADR-011 aplicado a datos:
+    INSERT ... ON CONFLICT (slug) DO NOTHING, jamás UPDATE ni DELETE de
+    entidades declaradas (la tabla nunca se recorta: quitar una entidad del
+    YAML la deja viva en la BD; es gobernanza, no limpieza).
+
+    Reclamo dirigido de la fila histórica (excepción aprobada por David,
+    25 nov): los despliegues con historia ya tienen un system_default
+    auto-vivificado con role='system_default' y sin slug. Sin el reclamo,
+    el INSERT crearía una segunda identidad system_default y la frontera
+    del [ADR-012-002] tendría que tratar la fila legacy como alias para
+    siempre. Esta única UPDATE es idempotente y circunscrita: solo toca
+    filas role='system_default' con slug NULL y solo si ninguna fila ha
+    reclamado aún el slug.
+    """
+    await conn.execute(
+        text(
+            "UPDATE entities SET slug = :slug "
+            "WHERE role = :role AND slug IS NULL "
+            "AND NOT EXISTS (SELECT 1 FROM entities WHERE slug = :slug)"
+        ),
+        {"slug": SYSTEM_DEFAULT_SLUG, "role": SYSTEM_DEFAULT_ROLE},
+    )
+    # system_default implícito primero (lo declare o no el YAML), declaradas
+    # en el orden del fichero para logs deterministas.
+    rows = [
+        {
+            "slug": SYSTEM_DEFAULT_SLUG,
+            "role": SYSTEM_DEFAULT_ROLE,
+            "label": None,
+            "metadata_payload": dict(SYSTEM_DEFAULT_METADATA),
+        },
+    ]
+    rows.extend(
+        {"slug": d.id, "role": DECLARED_ROLE, "label": d.label, "metadata_payload": {}}
+        for d in declarations
+    )
+    for row in rows:
+        stmt = pg_insert(Base.metadata.tables["entities"]).values(**row)
+        stmt = stmt.on_conflict_do_nothing(index_elements=["slug"])
+        await conn.execute(stmt)
+        logger.info("Entidad garantizada (si ausente): %s", row["slug"])
+
+
 async def ensure_relational_schema() -> None:
     """
     Garantiza enums + tablas + valores de enum nuevos + columnas nuevas +
-    índices nuevos. Idempotente.
+    índices nuevos + entidades declarativas. Idempotente.
 
-    Orden (ADR-011 #100; índices de 4.4-001 #103):
+    Orden (ADR-011 #100; índices de 4.4-001 #103; entidades de ADR-012-001 #112):
+    0. validación del YAML de entidades — determinista ANTES de tocar la BD:
+       un fichero malformado aborta el arranque sin haber emitido DDL alguno;
     1. enums (CREATE TYPE condicional) + create_all en una única transacción —
        models.py declara create_type=False y los tipos deben existir antes;
     2. ALTER TYPE ... ADD VALUE IF NOT EXISTS con commit intermedio por valor;
     3. ALTER TABLE ... ADD COLUMN IF NOT EXISTS derivado de information_schema
        y CREATE INDEX IF NOT EXISTS derivado de pg_indexes, en la misma tx,
-       cerrada con commit explícito.
+       cerrada con commit explícito;
+    4. INSERT ... ON CONFLICT (slug) DO NOTHING de las entidades del YAML +
+       system_default implícito (con reclamo de la fila legacy), en tx propia:
+       la tabla y su índice único ya existen cuando corre.
     """
+    declarations = load_entity_declarations(config_manager.get_entities_file_path())
     async with engine.begin() as conn:
         await ensure_enums(conn)
         await conn.run_sync(Base.metadata.create_all)
@@ -196,7 +267,11 @@ async def ensure_relational_schema() -> None:
         await ensure_columns(conn)
         await ensure_indexes(conn)
         await conn.commit()
+    async with engine.begin() as conn:
+        await ensure_entities(conn, declarations)
     logger.info(
         "Esquema relacional garantizado: enums + tablas + valores + columnas + índices "
-        "(idempotente, ADR-011)"
+        "+ %d entidades (%d declaradas en el YAML), idempotente (ADR-011 / ADR-012-001)",
+        len(declarations) + 1,
+        len(declarations),
     )

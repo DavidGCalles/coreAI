@@ -68,6 +68,8 @@ pytest
 >
 > **Regla de esquema aditivo (ADR-011):** los modelos ORM son la única fuente de verdad del esquema; no hay migraciones (Alembic queda fuera del repo) y el bootstrap garantiza al arranque las tablas, columnas y valores de enum que falten. El esquema evoluciona solo de forma aditiva: sin DROP, renombres ni cambios de tipo salvo ADR explícito con script one-shot documentado; toda columna nueva es nullable o lleva default.
 
+> **Entidades declarativas (ADR-012-001):** las identidades del inquilino viven en `data/entities/entities.yaml` (volumen de datos, fuera del repo; referencia en `src/config/entities.example.yaml`). El bootstrap garantiza al arranque las entidades del fichero más un `system_default` implícito, con `INSERT ... ON CONFLICT (slug) DO NOTHING`: idempotente y aditivo — la tabla jamás se recorta. Fichero ausente o vacío: arranque normal con solo `system_default`; malformado: error de arranque determinista (fichero y razón, sin backoff). Solo la ruta viaja por env (`ENTITIES_FILE`); el contenido de entidades jamás viaja por env.
+
 **Prerrequisitos:**
 - Docker + Docker Compose.
 - Modelos: Infinity sirve embeddings de texto e imagen desde `/data` (ver `scripts/prepare_model.py` — el kit CLIP de visión lo prepara `scripts/prepare_clip_kit.py`); el chat apunta al gateway LiteLLM (`:4000`, config en `src/config/litellm_config.edge.yaml`), que enruta hacia tu modelo local.
@@ -104,7 +106,7 @@ pytest
 
 ```
 src/
-  config/        # litellm_config.edge.yaml, provisioning de Prometheus/Grafana
+  config/        # litellm_config.edge.yaml, provisioning de Prometheus/Grafana, entities.example.yaml
   contracts/     # Registro central de contratos de tarea (ADR-006-001)
   db/            # SQLAlchemy: modelos, bootstrap del esquema al arranque (BUG-010), sesiones, repositorios
   managers/      # TaskManager, HybridMemoryManager, LLMClient, ConfigManager
@@ -138,6 +140,7 @@ scripts/         # prepare_model (+ prepare_clip_kit), schedulers/crontab
 | [008](docs/adr/008-mcp-streamable-http.md) | Superficie MCP sobre Streamable HTTP — el mismo server sirve STDIO y streamable HTTP; service del compose en http (✅ implementado, 28 oct) |
 | [009](docs/adr/009-memory-correction-surface.md) | Superficie de Corrección de la Memoria — el ciclo de vida de lo ya almacenado es del substrato: corrección de metadata por evento, sin re-embedding (✅ implementado, 3 nov) |
 | [011](docs/adr/011-esquema-aditivo-bootstrap-idempotente.md) | Esquema Aditivo con Bootstrap Idempotente — los modelos ORM son la única fuente de verdad del esquema; Alembic fuera del repo; evolución solo aditiva garantizada al arranque (✅ implementado, 15 nov) |
+| [012](docs/adr/012-identidad-y-visibilidad-en-la-frontera.md) | Identidad y Visibilidad en la Frontera — entidades declarativas gobernadas en el despliegue, resolución en la frontera con fallo determinista, actor en contexto y titularidad por registro; sin cerrar el RBAC posterior (familia #112–#116 en curso) |
 
 ## Estado del proyecto
 

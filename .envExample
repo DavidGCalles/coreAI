@@ -29,6 +29,15 @@ APP_ENV=development
 LOG_LEVEL=INFO
 
 # ==========================================
+# ENTIDADES DECLARATIVAS (ADR-012-001 #112)
+# ==========================================
+# Solo la RUTA del fichero YAML va por env — el contenido de entidades jamás
+# (D2 del ADR-012). Montado por el compose desde ./data/entities/ (ejemplo de
+# referencia: src/config/entities.example.yaml). Ausente o vacío = arranque
+# normal con solo system_default; malformado = error de arranque determinista.
+ENTITIES_FILE=/app/entities/entities.yaml
+
+# ==========================================
 # REINTENTOS DE TAREAS (Issue 4.4 — Retries y DLQ)
 # ==========================================
 # Reintentos de una tarea antes de FAILED (la DLQ lógica del 4.4)
