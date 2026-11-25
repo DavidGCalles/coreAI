@@ -3,7 +3,7 @@ from sqlalchemy import select, func
 
 from src.db.database import AsyncSessionLocal, engine
 from src.db.models import Task, Session, Entity
-from src.repositories.relational import TaskRepository, SessionRepository, EntityRepository
+from src.repositories.relational import TaskRepository, SessionRepository
 from src.managers.task_manager import TaskManager
 from src.schemas.tasks import TaskDispatchRequest
 

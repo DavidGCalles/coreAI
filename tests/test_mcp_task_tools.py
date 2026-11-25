@@ -638,9 +638,11 @@ async def test_mcp_dispatch_identidad_titula_con_sesion_explicita(db_session):
         await _purge_entity_by_slug(db_session, slug)
     declared = Entity(role="user", slug="frontier-david")
     owner = Entity(role="user", slug="frontier-owner")
-    sesion_ajena = Session(entity_id=None)  # se liga al owner tras el flush
-    sesion_ajena.entity = owner
-    db_session.add_all([declared, owner, sesion_ajena])
+    db_session.add_all([declared, owner])
+    await db_session.flush()
+    # Los modelos no definen relationships: la sesión se liga por entity_id
+    sesion_ajena = Session(entity_id=owner.id)
+    db_session.add(sesion_ajena)
     await db_session.commit()
 
     arguments = {
