@@ -17,6 +17,12 @@
 #   solo deja de garantizarse en despliegues limpios.
 #
 # Fichero ausente o vacío: arranque normal con solo system_default.
+#
+# El ejemplo declara identities del propio sustrato (sus lanes internos),
+# no personas: cada despliegue sustituye esto por las identities de su
+# inquilino. system_default no se declara: el bootstrap lo garantiza solo.
 entities:
-  - id: david
-    label: David Gómez
+  - id: coreai-worker
+    label: Lane worker — orquestación de fondo del sustrato
+  - id: coreai-cron
+    label: Lane cron — tareas periódicas del stack
