@@ -41,6 +41,22 @@ def ensure_test_database():
         finally:
             await conn.close()
 
+        # Esquema al día: la misma autonomía del bootstrap aplicada al rig
+        # [ADR-012-002 #113]. La suite de frontera despacha con columnas nuevas
+        # (tasks.entity_id, entities.slug) y depender de que algún test
+        # anterior haya corrido el bootstrap contra la BD de pruebas es
+        # exactamente la trampa de autonomía que este fixture ya mató con el
+        # catálogo: una pasada idempotente de ensure_relational_schema por
+        # sesión y el rig queda SIEMPRE al esquema de la rama (ADR-011).
+        from src.db.bootstrap import ensure_relational_schema
+        from src.db.database import engine
+
+        await ensure_relational_schema()
+        # El engine vive en el loop de este asyncio.run: el pool se disuelve
+        # AQUÍ para que ninguna conexión atraviese loops (misma lección que
+        # el fixture per-test dispose_engine_pool).
+        await engine.dispose()
+
     asyncio.run(_ensure())
 
 
