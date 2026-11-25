@@ -63,7 +63,7 @@ async def setup_running_task(db_session):
 
     task = await task_repo.create(
         session_id=session_db.id,
-        payload={"task_type": "dummy_test_task", "extra": "dato-del-inquilino"},
+        payload={"task_type": "dummy_test_task", "extra": "dato-del-inquilino", "actor": "lane-de-test"},
     )
     await db_session.commit()
 
@@ -121,6 +121,55 @@ async def test_retry_transitorio_difiere_y_cuenta(db_session, setup_running_task
     assert entrada["attempt"] == 1
     assert entrada["trace"] == "httpx.ConnectError: Connection refused"
     assert tarea.payload["error_trace"] == "httpx.ConnectError: Connection refused"
+
+
+@pytest.mark.asyncio
+async def test_error_history_enriquece_con_el_actor_del_contexto(db_session, setup_running_task):
+    """
+    [ADR-012-003] #114: cada entrada de error_history lleva el actor
+    estampado en el contexto de la tarea — la DLQ dice QUIÉN despachó cada
+    intento (apto Grafana). El actor lo leyó retry_task del propio JSONB.
+    """
+    repo = TaskRepository(db_session)
+
+    await repo.retry_task(setup_running_task, "httpx.ConnectError: Connection refused")
+    await repo.retry_task(setup_running_task, "httpx.ReadTimeout: Read timed out")
+
+    tarea = await _leer(db_session, setup_running_task)
+    historial = tarea.payload["error_history"]
+    assert len(historial) == 2
+    for entrada in historial:
+        assert entrada["actor"] == "lane-de-test", (
+            "Cada intento de la DLQ debe llevar el actor del dispatch"
+        )
+    # El actor de CONTEXTO del payload sigue intacto: solo se enriquece el
+    # historial, el contexto no se reescribe.
+    assert tarea.payload["actor"] == "lane-de-test"
+
+
+@pytest.mark.asyncio
+async def test_error_history_tarea_historica_sin_actor_queda_en_none(db_session, setup_running_task):
+    """
+    [ADR-012-003] #114: una tarea histórica (anterior a la familia, sin actor
+    estampado) agrega entradas con actor None — la auditoría no se reescribe
+    ni se inventa trazabilidad que nunca existió.
+    """
+    db_session.expunge_all()
+    await db_session.execute(
+        update(Task)
+        .where(Task.id == setup_running_task)
+        .values({Task.payload: {"task_type": "dummy_test_task", "extra": "legado-pre-familia"}})
+    )
+    await db_session.commit()
+
+    repo = TaskRepository(db_session)
+    desenlace = await repo.retry_task(setup_running_task, "RuntimeError: fallo del legado")
+    assert desenlace is not None and desenlace["outcome"] == "RETRY"
+
+    tarea = await _leer(db_session, setup_running_task)
+    entrada = tarea.payload["error_history"][0]
+    assert entrada["actor"] is None, "Sin actor en el contexto, la entrada queda en None."
+    assert "actor" not in tarea.payload or tarea.payload["actor"] is None
 
 
 @pytest.mark.asyncio
