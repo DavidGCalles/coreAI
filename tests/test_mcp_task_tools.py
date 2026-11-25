@@ -508,14 +508,33 @@ async def test_mcp_retry_failed_task_converges_without_double_application(db_ses
 
 async def _purge_entity_by_slug(db_session, slug):
     """
-    Limpieza hermética e idempotente: borra la entidad de prueba con TODO lo
-    que cuelgue de ella (sesiones y tasks caen en CASCADE desde la entidad).
+    Limpieza hermética e idempotente: retira la entidad de prueba con TODO lo
+    que cuelga de ella, en orden FK-seguro. tasks.entity_id NO lleva ondelete
+    (la titularidad es referencial, ADR-012-002): una task titulada bloquea
+    el DELETE de su entidad, así que se retira primero; las sesiones caerían
+    solas por el CASCADE de sessions.entity_id, pero se retiran a mano para
+    no depender del orden en que Postgres evalúa las restricciones.
     Arranque y cierre del caso, para que runs sucesivos no pisen slugs ya
     registrados (idx_entities_slug es unique).
     """
+    entity_id = (await db_session.execute(
+        select(Entity.id).where(Entity.slug == slug)
+    )).scalar_one_or_none()
+    if entity_id is None:
+        return
+    await db_session.execute(
+        delete(Task)
+        .where(Task.entity_id == entity_id)
+        .execution_options(synchronize_session=False)
+    )
+    await db_session.execute(
+        delete(Session)
+        .where(Session.entity_id == entity_id)
+        .execution_options(synchronize_session=False)
+    )
     await db_session.execute(
         delete(Entity)
-        .where(Entity.slug == slug)
+        .where(Entity.id == entity_id)
         .execution_options(synchronize_session=False)
     )
     await db_session.commit()
@@ -618,12 +637,25 @@ async def test_mcp_dispatch_identidad_ausente_resuelve_system_default(db_session
     assert after[1] == before[1] + 1, "la sesión huérfana vivificada"
     assert after[2] == before[2], "NINGUNA entidad auto-vivificada: fin del patrón"
 
-    # Limpieza manual: solo lo creado por el caso (la fila del implícito es del bootstrap)
+    # Limpieza manual: solo lo creado por el caso (la fila del implícito es del
+    # bootstrap). Baja por bulk y en orden FK (task → sesión): el DELETE ORM en
+    # unidad-de-trabajo puede disparar la sesión primero y el CASCADE de
+    # tasks.session_id se llevaría la fila antes de que corra el DELETE de la
+    # task (SAWarning: 0 filas matcheadas). La bulk deletion ni siquiera hace
+    # planning en ORM: lo que se pide es lo que corre.
     session_in_db = (await db_session.execute(
         select(Session).where(Session.id == task_in_db.session_id)
     )).scalar_one()
-    await db_session.delete(task_in_db)
-    await db_session.delete(session_in_db)
+    await db_session.execute(
+        delete(Task)
+        .where(Task.id == task_in_db.id)
+        .execution_options(synchronize_session=False)
+    )
+    await db_session.execute(
+        delete(Session)
+        .where(Session.id == session_in_db.id)
+        .execution_options(synchronize_session=False)
+    )
     await db_session.commit()
 
 @pytest.mark.asyncio
