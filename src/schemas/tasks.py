@@ -1,8 +1,10 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Any
 from uuid import UUID
 from enum import StrEnum
 from datetime import datetime
+
+from src.db.entities_config import ID_PATTERN, MAX_ID_LENGTH
 
 class TaskType(StrEnum):
     """Catálogo estricto de capacidades del Córtex Asíncrono."""
@@ -19,7 +21,15 @@ class TaskDispatchRequest(BaseModel):
     """
     Contrato estricto para la ingesta de tareas vía MCP.
     Fuerza al cliente a estructurar su caos antes de tocar la base de datos.
+
+    Sobre plano y cerrado (ADR-012-002, #113): las claves desconocidas
+    rebotan. El sobre del despacho es del sustrato, y el `entity_id` UUID
+    legacy (muerto con la auto-vivificación) no puede colar silencioso: un
+    remitente estancado se entera AQUÍ, no cuando su tarea aparece
+    titulada a otro.
     """
+    model_config = ConfigDict(extra="forbid")
+
     task_type: TaskType = Field(
         ..., 
         description="Identificador exacto del tipo de tarea. Solo se aceptan los valores listados."
@@ -32,14 +42,38 @@ class TaskDispatchRequest(BaseModel):
         None, 
         description="Opcional. UUID de la sesión si la tarea pertenece a un hilo existente."
     )
-    entity_id: UUID | None = Field(
-        None, 
-        description="Opcional. UUID del dueño. Si se omite junto con session_id, el sistema auto-asignará uno."
+    entity: str | None = Field(
+        None,
+        pattern=ID_PATTERN.pattern,
+        max_length=MAX_ID_LENGTH,
+        description=(
+            "Opcional. Slug de la identidad que despacha (ADR-012-002), tal "
+            "como vive registrada en el despliegue (YAML + bootstrap, "
+            "ADR-012-001). Declarada y registrada: la respuesta devuelve su "
+            "entity_id resuelta. Declarada y NO registrada: fallo "
+            "determinista con el catálogo de entidades válidas, la tarea no "
+            "se crea y reintentar no sirve. Ausente: system_default, "
+            "explícito en la respuesta."
+        ),
     )
 
 class TaskDispatchResponse(BaseModel):
+    """
+    Desenlace del dispatch: la tarea en PENDING y la identidad YA resuelta.
+    [ADR-012-002] #113: la entity_id viaja SIEMPRE — también cuando el
+    despacho no declaró identidad (system_default explícito): la resolución
+    deja de ser silenciosa.
+    """
     task_id: UUID
     session_id: UUID
+    entity_id: UUID = Field(
+        ...,
+        description=(
+            "Entidad que la frontera resolvió contra el registro del "
+            "despliegue: la titularidad de la fila y de la sesión huérfana "
+            "si se vivificó."
+        ),
+    )
     status: str = "PENDING"
 
 class TaskGetRequest(BaseModel):

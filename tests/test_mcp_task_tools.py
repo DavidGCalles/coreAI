@@ -1,7 +1,7 @@
 import pytest
 import json
 import uuid
-from sqlalchemy import select, func, update
+from sqlalchemy import delete, select, func, update
 
 from src.db.database import AsyncSessionLocal, engine
 from src.db.models import Task, Session, Entity, TaskStatus
@@ -501,3 +501,219 @@ async def test_mcp_retry_failed_task_converges_without_double_application(db_ses
     # Limpieza manual
     await db_session.delete(task_in_db)
     await db_session.commit()
+
+# =====================================================================
+# ADR-012-002 (#113): frontera de identidad — los tres casos de resolución
+# =====================================================================
+
+async def _purge_entity_by_slug(db_session, slug):
+    """
+    Limpieza hermética e idempotente: retira la entidad de prueba con TODO lo
+    que cuelga de ella, en orden FK-seguro. tasks.entity_id NO lleva ondelete
+    (la titularidad es referencial, ADR-012-002): una task titulada bloquea
+    el DELETE de su entidad, así que se retira primero; las sesiones caerían
+    solas por el CASCADE de sessions.entity_id, pero se retiran a mano para
+    no depender del orden en que Postgres evalúa las restricciones.
+    Arranque y cierre del caso, para que runs sucesivos no pisen slugs ya
+    registrados (idx_entities_slug es unique).
+    """
+    entity_id = (await db_session.execute(
+        select(Entity.id).where(Entity.slug == slug)
+    )).scalar_one_or_none()
+    if entity_id is None:
+        return
+    await db_session.execute(
+        delete(Task)
+        .where(Task.entity_id == entity_id)
+        .execution_options(synchronize_session=False)
+    )
+    await db_session.execute(
+        delete(Session)
+        .where(Session.entity_id == entity_id)
+        .execution_options(synchronize_session=False)
+    )
+    await db_session.execute(
+        delete(Entity)
+        .where(Entity.id == entity_id)
+        .execution_options(synchronize_session=False)
+    )
+    await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_mcp_dispatch_identidad_declarada_registrada(db_session):
+    """
+    Caso 1 (ADR-012-002): declarada y registrada → la respuesta devuelve la
+    entity_id resuelta, la fila nace titulada y la sesión huérfana se liga
+    a la entidad declarada.
+    """
+    await _purge_entity_by_slug(db_session, "frontier-david")
+    declared = Entity(role="user", slug="frontier-david")
+    db_session.add(declared)
+    await db_session.commit()
+
+    arguments = {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": "Despacho con identidad declarada y registrada."},
+        "entity": "frontier-david",
+    }
+    response = await handle_task_tool("coreai_dispatch_task", arguments)
+
+    assert response["isError"] is False, f"El dispatch falló: {response}"
+    content = json.loads(response["content"][0]["text"])
+    assert content["entity_id"] == str(declared.id)
+
+    task_id = uuid.UUID(content["task_id"])
+    task_in_db = (await db_session.execute(
+        select(Task).where(Task.id == task_id)
+    )).scalar_one()
+    assert task_in_db.entity_id == declared.id, "La task no nació titulada a la declarada."
+
+    session_in_db = (await db_session.execute(
+        select(Session).where(Session.id == task_in_db.session_id)
+    )).scalar_one()
+    assert session_in_db.entity_id == declared.id, "La sesión huérfana no quedó ligada a la declarada."
+
+    await _purge_entity_by_slug(db_session, "frontier-david")
+
+@pytest.mark.asyncio
+async def test_mcp_dispatch_identidad_no_registrada_es_veneno(db_session):
+    """
+    Caso 2 / D4 (ADR-012-002): declarada y NO registrada → isError
+    DETERMINISTA con catálogo inline; read-only total: ni task en PENDING ni
+    RUNNING, ni sesión o entidad auto-vivificada. Y aplica a TODAS las task
+    types: la frontera es una sola.
+    """
+    before = await _row_counts(db_session)
+
+    arguments = {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": "Despacho con entidad fantasma."},
+        "entity": "frontier-fantasma",
+    }
+    response = await handle_task_tool("coreai_dispatch_task", arguments)
+
+    assert response["isError"] is True, "El slug no registrado debe rebotar en la frontera"
+    text = response["content"][0]["text"]
+    assert "frontier-fantasma" in text
+    assert "no está registrada" in text
+    assert "determinista" in text, "El error debe clasificarse como determinista"
+    assert "NO se encoló" in text
+    assert "system_default" in text, "El catálogo inline incluye al implícito"
+
+    after = await _row_counts(db_session)
+    assert after == before, f"El veneno dejó filas: antes {before}, después {after}"
+
+@pytest.mark.asyncio
+async def test_mcp_dispatch_identidad_ausente_resuelve_system_default(db_session):
+    """
+    Caso 3 (ADR-012-002): identidad ausente → system_default EXPLÍCITO en la
+    respuesta y en la titularidad de la fila. La resolución deja de ser
+    silenciosa sin exigir provisión previa al despachante (arranque autónomo)
+    y NINGÚN despacho crea entidades: implícito ≠ auto-vivificado.
+    """
+    before = await _row_counts(db_session)
+
+    arguments = {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": "Despacho sin identidad declarada."},
+    }
+    response = await handle_task_tool("coreai_dispatch_task", arguments)
+
+    assert response["isError"] is False, f"El dispatch falló: {response}"
+    content = json.loads(response["content"][0]["text"])
+
+    implicit = (await db_session.execute(
+        select(Entity).where(Entity.slug == "system_default")
+    )).scalar_one()  # garantizado por el bootstrap (ADR-012-001, conftest)
+    assert content["entity_id"] == str(implicit.id)
+
+    task_in_db = (await db_session.execute(
+        select(Task).where(Task.id == uuid.UUID(content["task_id"]))
+    )).scalar_one()
+    assert task_in_db.entity_id == implicit.id, "La task no quedó titulada al implícito."
+
+    after = await _row_counts(db_session)
+    assert after[0] == before[0] + 1, "la task"
+    assert after[1] == before[1] + 1, "la sesión huérfana vivificada"
+    assert after[2] == before[2], "NINGUNA entidad auto-vivificada: fin del patrón"
+
+    # Limpieza manual: solo lo creado por el caso (la fila del implícito es del
+    # bootstrap). Baja por bulk y en orden FK (task → sesión): el DELETE ORM en
+    # unidad-de-trabajo puede disparar la sesión primero y el CASCADE de
+    # tasks.session_id se llevaría la fila antes de que corra el DELETE de la
+    # task (SAWarning: 0 filas matcheadas). La bulk deletion ni siquiera hace
+    # planning en ORM: lo que se pide es lo que corre.
+    session_in_db = (await db_session.execute(
+        select(Session).where(Session.id == task_in_db.session_id)
+    )).scalar_one()
+    await db_session.execute(
+        delete(Task)
+        .where(Task.id == task_in_db.id)
+        .execution_options(synchronize_session=False)
+    )
+    await db_session.execute(
+        delete(Session)
+        .where(Session.id == session_in_db.id)
+        .execution_options(synchronize_session=False)
+    )
+    await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_mcp_dispatch_identidad_titula_con_sesion_explicita(db_session):
+    """
+    La identidad es del DESPACHO, no de la sesión: con session_id explícito
+    la task nace titulada a la entidad declarada aunque la sesión pertenezca
+    a otra entidad — la coherencia sesión↔despachante no es ley de la
+    frontera (ADR-012-002).
+    """
+    for slug in ("frontier-david", "frontier-owner"):
+        await _purge_entity_by_slug(db_session, slug)
+    declared = Entity(role="user", slug="frontier-david")
+    owner = Entity(role="user", slug="frontier-owner")
+    db_session.add_all([declared, owner])
+    await db_session.flush()
+    # Los modelos no definen relationships: la sesión se liga por entity_id
+    sesion_ajena = Session(entity_id=owner.id)
+    db_session.add(sesion_ajena)
+    await db_session.commit()
+
+    arguments = {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": "Despacho titulado al declarante con sesión ajena."},
+        "session_id": str(sesion_ajena.id),
+        "entity": "frontier-david",
+    }
+    response = await handle_task_tool("coreai_dispatch_task", arguments)
+
+    assert response["isError"] is False, f"El dispatch falló: {response}"
+    content = json.loads(response["content"][0]["text"])
+    assert content["session_id"] == str(sesion_ajena.id)
+    assert content["entity_id"] == str(declared.id)
+
+    task_in_db = (await db_session.execute(
+        select(Task).where(Task.id == uuid.UUID(content["task_id"]))
+    )).scalar_one()
+    assert task_in_db.entity_id == declared.id
+
+    for slug in ("frontier-david", "frontier-owner"):
+        await _purge_entity_by_slug(db_session, slug)
+
+@pytest.mark.asyncio
+async def test_mcp_dispatch_identidad_charset_invalido_rebota(db_session):
+    """
+    El charset del slug se valida en el BORDE (misma familia que la forma del
+    payload): mayúsculas o espacios rebota ANTES de abrir el registro, sin
+    tocar la BD.
+    """
+    before = await _row_counts(db_session)
+
+    response = await handle_task_tool("coreai_dispatch_task", {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": "Despacho con slug fuera de charset."},
+        "entity": "Slug-Invalido",
+    })
+
+    assert response["isError"] is True, "El slug fuera de charset debe rebotar en el borde"
+
+    after = await _row_counts(db_session)
+    assert after == before, f"El rechazo mutó la BD: antes {before}, después {after}"
