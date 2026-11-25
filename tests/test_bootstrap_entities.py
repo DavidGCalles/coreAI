@@ -211,7 +211,10 @@ async def test_ensure_entities_clama_la_fila_legacy_e_inserta_en_orden():
     # Reclamo primero (la fila legacy de system_default existe antes que nada
     # más), luego system_default implícito, luego las declaradas en orden.
     assert order[0].startswith("UPDATE entities")
-    assert "role = :role" in order[0]
+    # Los binds JAMÁS aparecen como :param en el SQL compilado (el dialecto
+    # los reescribe a pyformat/format): se verifica como bound params.
+    first_params = conn.execute.await_args_list[0].args[1]
+    assert first_params == {"slug": SYSTEM_DEFAULT_SLUG, "role": SYSTEM_DEFAULT_ROLE}
     assert order[1].startswith("INSERT INTO entities")
     assert "ON CONFLICT (slug) DO NOTHING" in order[1]
     assert order[2].startswith("INSERT INTO entities")
