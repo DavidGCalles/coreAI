@@ -1,0 +1,24 @@
+# Provisión declarativa de entidades — ADR-012-001 (#112).
+#
+# Este fichero es la REFERENCIA. El stack lee el montado por el compose en
+# /app/entities/entities.yaml (ruta configurable via ENTITIES_FILE, ver
+# .envExample): cópialo a data/entities/entities.yaml y edítalo. Las
+# identidades son gobernanza del despliegue (fichero + commit + PR), nunca
+# contenido de variables de entorno (D2 del ADR-012).
+#
+# Reglas del fichero:
+# - id: charset [a-z0-9_-], obligatorio, único, máx 64 caracteres.
+# - label: opcional (presentación), máx 255.
+# - Claves desconocidas o ids duplicados = malformado: error de arranque
+#   determinista (fichero y razón; nada de arranque a medias).
+# - system_default está garantizado SIEMPRE por el bootstrap: declararlo es
+#   innecesario, y la provisión jamás modifica lo ya presente.
+# - Quitar una entidad del fichero NO la borra de la BD (esquema aditivo):
+#   solo deja de garantizarse en despliegues limpios.
+#
+# Fichero ausente o vacío: arranque normal con solo system_default.
+entities:
+  - id: david
+    label: David Gómez
+  - id: elios-workshop
+    label: Taller ELIOS

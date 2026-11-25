@@ -4,6 +4,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.database import AsyncSessionLocal
 from src.db.bootstrap import ensure_relational_schema
+from src.db.entities_config import EntitiesProvisionError
 from src.repositories.relational import TaskRepository
 from src.logging_config import configure_logging, set_current_task_id, clear_current_task_id
 from src.managers.config_manager import config_manager
@@ -87,6 +88,15 @@ async def garantia_arranque() -> None:
             await ensure_relational_schema()
             logger.info("Esquema relacional garantizado al arranque (BUG-011 #107)")
             break
+        except EntitiesProvisionError as entities_error:
+            # [ADR-012-001] #112: provisión malformada = fallo DETERMINISTA de
+            # configuración — reintentar es reintentar el mismo fichero. Sin
+            # backoff: el arranque muere aquí, explícito y con fichero y razón.
+            logger.error(
+                "Provisión declarativa de entidades inválida, arranque abortado: %s",
+                entities_error,
+            )
+            raise
         except Exception as init_error:
             logger.error(
                 "No se pudo garantizar el esquema relacional: %s — reintento en %.1fs",

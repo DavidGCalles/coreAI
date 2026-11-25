@@ -111,6 +111,12 @@ services:
       - "8000:8000"
     volumes:
       - ./src:/app/src
+      # [ADR-012-001] #112: entidades declarativas del despliegue — fichero
+      # YAML en el volumen de datos (identidades fuera del repo; ejemplo de
+      # referencia en src/config/entities.example.yaml). Ausente: arranque
+      # normal con solo system_default. Ambos procesos arrancan el bootstrap
+      # (BUG-011 #107): ambos montan.
+      - ./data/entities:/app/entities
     env_file:
       - .env
     depends_on:
@@ -141,6 +147,9 @@ services:
     container_name: coreai_worker
     volumes:
       - ./src:/app/src
+      # [ADR-012-001] #112: igual que core-mcp — el worker también garantiza
+      # el arranque completo (BUG-011 #107), incluida la provisión.
+      - ./data/entities:/app/entities
     env_file:
       - .env
     depends_on:
