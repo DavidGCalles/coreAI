@@ -3,63 +3,19 @@ import logging
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.database import AsyncSessionLocal
+from src.db.bootstrap import ensure_relational_schema
 from src.repositories.relational import TaskRepository
 from src.logging_config import configure_logging, set_current_task_id, clear_current_task_id
 from src.managers.config_manager import config_manager
 from src.workers.task_router import route_task
 from src.workers.failure_classification import es_fallo_determinista
-from src.schemas.memory import DomainType
-from src.db.vector_db import get_qdrant_client
-from src.repositories.vector import (
-    VectorRepository,
-    IMAGE_COLLECTION,
-    IMAGE_VECTOR_SIZE,
-    IMAGE_VECTOR_DISTANCE,
-    TEXT_VECTOR_SIZE,
-    TEXT_VECTOR_DISTANCE,
-)
+from src.db.vector_db import ensure_collections
 
 configure_logging(level=config_manager.get_app_config()["log_level"])
 logger = logging.getLogger("coreai-worker")
 
 INITIAL_BACKOFF = 1.0
 MAX_BACKOFF = 30.0
-
-
-async def ensure_collections() -> None:
-    """
-    Garantía idempotente de TODAS las colecciones derivadas del sistema
-    (ADR-007-002 #50; BUG-001 #34).
-
-    La colección de imágenes se creó a mano en su día: nada garantizaba su
-    existencia en un despliegue limpio, y el handler moría asíncrono contra
-    una colección inexistente. Las colecciones de TEXTO por dominio
-    (document, conversation, system — multilingual-e5-small, 384 dims,
-    coseno) tenían el mismo agujero hasta el BUG-001: un `docker-compose
-    down -v` seguido de arranque limpio las auto-genera TODAS sin
-    intervención manual, y el arranque es idempotente (comparación de
-    nombres, nunca try/except). Si una colección preexistente trae dims
-    de otro modelo, el arranque revienta explícito — la topología se
-    valida ANTES de aceptar tráfico, no tarea a tarea en el upsert.
-    """
-    client = await get_qdrant_client()
-    repo = VectorRepository(client=client)
-
-    # Colecciones de texto: una por cada dominio del catálogo (BUG-001 #34),
-    # mismas dims que el embedding de texto que genera _get_embedding.
-    for domain in DomainType:
-        await repo.ensure_collection(
-            collection_name=domain.value,
-            vector_size=TEXT_VECTOR_SIZE,
-            distance=TEXT_VECTOR_DISTANCE,
-        )
-
-    # Colección de imágenes (jina-clip-v2, 1024 dims — ADR-007-002 #50).
-    await repo.ensure_collection(
-        collection_name=IMAGE_COLLECTION,
-        vector_size=IMAGE_VECTOR_SIZE,
-        distance=IMAGE_VECTOR_DISTANCE,
-    )
 
 
 async def _resolver_fallo(repo: TaskRepository, task_id: UUID, error: Exception) -> None:
@@ -101,13 +57,48 @@ async def _resolver_fallo(repo: TaskRepository, task_id: UUID, error: Exception)
         )
 
 
-async def worker_loop():
+async def garantia_arranque() -> None:
+    """
+    ARRANQUE (BUG-011 #107): el worker garantiza TODO el sustrato que va a
+    tocar antes de consumir la cola — esquema relacional Y topología
+    vectorial. Hasta ahora cada proceso asumía que el otro ya había
+    arrancado (el esquema lo garantizaba solo core-mcp, BUG-010 #87; las
+    colecciones solo este worker, BUG-001 #34): un worker solo contra una
+    BD limpia reclamaba en bucle de error de infra hasta que el otro
+    arrancara.
+
+    Orden: esquema primero — el claim es lo primero que toca el bucle.
+
+    Sin engine.dispose() tras el ensure_relacional_schema: ese cierre
+    existe en core-mcp porque SU bootstrap corre en un event loop efímero
+    que se cierra antes de servir; el worker vive entero en UN solo loop
+    (asyncio.run(worker_loop())), así que las conexiones de pool creadas
+    por el bootstrap siguen válidas para el bucle entero.
+    """
     # =================================================================
-    # ARRANQUE: garantía de colecciones con backoff (ADR-007-002 #50,
-    # BUG-001 #34). Qdrant puede estar todavía levantándose (el worker
-    # no declara depends_on sobre él): no morimos por orden de arranque
-    # — reintentamos con el mismo backoff que el bucle. Pero NO
-    # consumimos la cola hasta que la topología completa esté
+    # Esquema relacional con backoff (BUG-011 #107). Postgres puede estar
+    # todavía levantándose: no morimos por orden de arranque — y NO
+    # consumimos la cola hasta tener el esquema garantizado (el claim de
+    # una BD limpia y sin core-mcp revienta en bucle de error de infra).
+    # =================================================================
+    boot_backoff = INITIAL_BACKOFF
+    while True:
+        try:
+            await ensure_relational_schema()
+            logger.info("Esquema relacional garantizado al arranque (BUG-011 #107)")
+            break
+        except Exception as init_error:
+            logger.error(
+                "No se pudo garantizar el esquema relacional: %s — reintento en %.1fs",
+                f"{type(init_error).__name__}: {init_error}", boot_backoff,
+            )
+            await asyncio.sleep(boot_backoff)
+            boot_backoff = min(boot_backoff * 2, MAX_BACKOFF)
+
+    # =================================================================
+    # Colecciones con backoff (ADR-007-002 #50, BUG-001 #34). Qdrant puede
+    # estar todavía levantándose (el worker no declara depends_on sobre
+    # él). Pero NO se consume la cola hasta que la topología completa esté
     # garantizada y validada.
     # =================================================================
     boot_backoff = INITIAL_BACKOFF
@@ -119,10 +110,17 @@ async def worker_loop():
         except Exception as init_error:
             logger.error(
                 "No se pudo garantizar las colecciones Qdrant: %s — reintento en %.1fs",
-                init_error, boot_backoff,
+                # Trace honesto (lección #61): clase + mensaje — un timeout
+                # de Qdrant llega con str() vacío y el log salía mudo.
+                f"{type(init_error).__name__}: {init_error}", boot_backoff,
             )
             await asyncio.sleep(boot_backoff)
             boot_backoff = min(boot_backoff * 2, MAX_BACKOFF)
+
+
+async def worker_loop():
+    # Ninguna reclamación antes de tener el sustrato garantizado (BUG-011 #107).
+    await garantia_arranque()
 
     logger.info("Córtex Asíncrono iniciado. A la escucha de tareas...")
     backoff = INITIAL_BACKOFF

@@ -2,6 +2,11 @@ import uuid
 import logging
 from typing import Any
 from qdrant_client import AsyncQdrantClient, models
+
+try:
+    from qdrant_client.http.exceptions import UnexpectedResponse
+except ImportError:  # la ruta del client ha variado entre versiones
+    from qdrant_client.http.api_exceptions import UnexpectedResponse  # type: ignore
 from src.schemas.memory import DomainType, MemorySearchFilters
 
 logger = logging.getLogger(__name__)
@@ -74,20 +79,46 @@ class VectorRepository:
         """
         existentes = {c.name for c in (await self.client.get_collections()).collections}
         if collection_name not in existentes:
-            await self.client.create_collection(
-                collection_name=collection_name,
-                vectors_config=models.VectorParams(
-                    size=vector_size,
-                    distance=distance,
-                ),
-            )
-            logger.info(
-                "Colección '%s' creada (%d dims, %s)",
-                collection_name, vector_size, distance,
-            )
-            return
+            try:
+                await self.client.create_collection(
+                    collection_name=collection_name,
+                    vectors_config=models.VectorParams(
+                        size=vector_size,
+                        distance=distance,
+                    ),
+                )
+                logger.info(
+                    "Colección '%s' creada (%d dims, %s)",
+                    collection_name, vector_size, distance,
+                )
+                return
+            except UnexpectedResponse as e:
+                # BUG-011 #107: en el boot entero, worker y core-mcp corren el
+                # mismo ensure a la vez y el vecino puede meter la colección
+                # ENTRE nuestro snapshot (get_collections) y nuestro create.
+                # El 409 es la señal idempotente de esa carrera, NO un fallo.
+                # Nada de re-validar AQUÍ: el vecino que acaba de crearla es un
+                # proceso gemelo corriendo ESTE MISMO código con ESTAS mismas
+                # constantes — la topología viene garantizada por construcción.
+                # Re-validar es además apostar por una ventana de warm-up: un
+                # get_collection contra una colección que el gemelo metió hace
+                # milisegundos contesta 500 transitorio ("0 of 0 read
+                # operations failed", hallazgo E2E 25 nov) y convierte el boot
+                # paralelo en ruido de ERROR + backoff. Cualquier otro status
+                # sí sube (un 500 de create no es idempotencia). La validación
+                # de lo preexistente no se pierde: en el SIGUIENTE arranque la
+                # colección ya existe y se valida como siempre.
+                if e.status_code != 409:
+                    raise
+                logger.info(
+                    "Colección '%s' creada concurrentemente por otro arranque "
+                    "(409) — topología garantizada por el gemelo",
+                    collection_name,
+                )
+                return
 
-        # Existe: validar la topología ANTES de aceptar tráfico (BUG-001 #34)
+        # Existe de antes (boot con historia): validar la topología ANTES de
+        # aceptar tráfico (BUG-001 #34)
         info = await self.client.get_collection(collection_name=collection_name)
         vectors = info.config.params.vectors
         if isinstance(vectors, dict) or vectors is None or vectors.size != vector_size or vectors.distance != distance:
