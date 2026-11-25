@@ -87,7 +87,9 @@ def _mock_conn(
         if sql.startswith("ALTER TABLE"):
             order.append("alter_column")
             return []
-        if sql.startswith("CREATE INDEX"):
+        if sql.startswith(("CREATE INDEX", "CREATE UNIQUE INDEX")):
+            # [ADR-012-001] #112: idx_entities_slug es el primer índice UNIQUE
+            # de la metadata — ensure_indexes lo emite como CREATE UNIQUE INDEX.
             order.append("create_index")
             return []
         order.append("enum")

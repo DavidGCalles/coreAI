@@ -356,9 +356,12 @@ async def test_integracion_reclama_la_fila_legacy_y_no_toca_a_los_demas(monkeypa
 
     _apuntar_entities_file(monkeypatch, tmp_path, None)
 
+    await ensure_relational_schema()  # esquema garantizado (despliegue limpio)
     await _limpiar_entidades()
-    await ensure_relational_schema()  # esquema garantizado (fila legacy simulada aparte)
-
+    # LA fila legacy del despliegue con historia: auto-vivificada por la
+    # frontera VIEJA (role='system_default', slug NULL) y NADA más — el
+    # snapshot previo a la familia. El reclamo debe levantarla a identidad
+    # declarativa SIN crear una segunda fila system_default.
     async with AsyncSessionLocal() as session:
         legacy_default = await EntityRepository(session).create(role="system_default")
         otra = await EntityRepository(session).create(role="test_historia")
