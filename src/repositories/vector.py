@@ -96,19 +96,29 @@ class VectorRepository:
                 # BUG-011 #107: en el boot entero, worker y core-mcp corren el
                 # mismo ensure a la vez y el vecino puede meter la colección
                 # ENTRE nuestro snapshot (get_collections) y nuestro create.
-                # El 409 es la señal idempotente de esa carrera, NO un fallo:
-                # cae a la MISMA validación de topología que lo preexistente.
-                # Cualquier otro status sube (un 500 no es idempotencia).
+                # El 409 es la señal idempotente de esa carrera, NO un fallo.
+                # Nada de re-validar AQUÍ: el vecino que acaba de crearla es un
+                # proceso gemelo corriendo ESTE MISMO código con ESTAS mismas
+                # constantes — la topología viene garantizada por construcción.
+                # Re-validar es además apostar por una ventana de warm-up: un
+                # get_collection contra una colección que el gemelo metió hace
+                # milisegundos contesta 500 transitorio ("0 of 0 read
+                # operations failed", hallazgo E2E 25 nov) y convierte el boot
+                # paralelo en ruido de ERROR + backoff. Cualquier otro status
+                # sí sube (un 500 de create no es idempotencia). La validación
+                # de lo preexistente no se pierde: en el SIGUIENTE arranque la
+                # colección ya existe y se valida como siempre.
                 if e.status_code != 409:
                     raise
                 logger.info(
                     "Colección '%s' creada concurrentemente por otro arranque "
-                    "(409) — re-validando topología",
+                    "(409) — topología garantizada por el gemelo",
                     collection_name,
                 )
+                return
 
-        # Existe (o acaba de crearla el vecino): validar la topología ANTES
-        # de aceptar tráfico (BUG-001 #34)
+        # Existe de antes (boot con historia): validar la topología ANTES de
+        # aceptar tráfico (BUG-001 #34)
         info = await self.client.get_collection(collection_name=collection_name)
         vectors = info.config.params.vectors
         if isinstance(vectors, dict) or vectors is None or vectors.size != vector_size or vectors.distance != distance:

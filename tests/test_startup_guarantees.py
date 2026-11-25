@@ -33,6 +33,7 @@ class FakeQdrantClient:
     def __init__(self):
         self.vectors_config = {}
         self.cerrado = False
+        self.consultas_topologia = []
 
     async def get_collections(self):
         return types.SimpleNamespace(
@@ -45,6 +46,7 @@ class FakeQdrantClient:
         self.vectors_config[collection_name] = vectors_config
 
     async def get_collection(self, collection_name):
+        self.consultas_topologia.append(collection_name)
         vc = self.vectors_config[collection_name]
         return types.SimpleNamespace(
             config=types.SimpleNamespace(
@@ -226,8 +228,10 @@ class QdrantConCarrera(FakeQdrantClient):
 async def test_ensure_collections_409_de_carrera_converge_limpio(monkeypatch):
     """
     BUG-011 #107: la idempotencia absorbe la concurrencia del boot entero.
-    El 409 del vecino es SEÑAL, no error: se re-valida la topología y el
-    arranque termina en verde sin un solo ERROR en el log.
+    El 409 del vecino es SEÑAL, no error — y NO re-valida: el gemelo corre
+    este mismo código con estas mismas constantes (topología garantizada
+    por construcción) y re-validar durante su warm-up mete 500s transitorios
+    (hallazgo E2E del 25 nov). Boot paralelo: cero ERROR, cero consultas.
     """
     fake = QdrantConCarrera("document")
 
@@ -240,6 +244,7 @@ async def test_ensure_collections_409_de_carrera_converge_limpio(monkeypatch):
 
     esperadas = {domain.value for domain in DomainType} | {IMAGE_COLLECTION}
     assert set(fake.vectors_config) == esperadas
+    assert fake.consultas_topologia == [], "el 409 de carrera no debe re-validar"
 
 
 @pytest.mark.asyncio
