@@ -240,7 +240,7 @@ async def bootstrap_schema_with_backoff() -> None:
             logger.info("Arranque: esquema relacional garantizado (BUG-010 #87)")
             return
         except EntitiesProvisionError as entities_error:
-            # [ADR-012-001] #112: provisión malformado = fallo DETERMINISTA de
+            # [ADR-012-001] #112: provisión malformada = fallo DETERMINISTA de
             # configuración — reintentar es reintentar el mismo fichero. Sin
             # backoff: el arranque muere aquí, explícito y con fichero y razón.
             logger.error(
