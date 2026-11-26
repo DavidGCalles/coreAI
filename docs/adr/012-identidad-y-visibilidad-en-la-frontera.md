@@ -1,7 +1,7 @@
 # ADR-012: Identidad y visibilidad en la frontera — el sustrato sabe quién despacha
 
 ## Status
-Proposed (25 nov 2026). Familia arrancada el 25 nov 2026: [ADR-012-001] #112, [ADR-012-002] #113, [ADR-012-003] #114, [ADR-012-004] #115 y [ADR-012-005] #116 como sub-issues nativos de esta issue; el doc aterriza al repo con el arranque, en PR propia (regla de la casa: el doc del ADR aterriza con el arranque de la familia, no al final). Refinado D1–D6 con David el 25-26 nov: sección «Refinado», abajo.
+Accepted (26 nov 2026) — familia completada: 001–005 implementados y validados (PRs #119–#123; issues #112–#116 cerrados; E2E 5/5 en la VM de desarrollo). Proposed 25 nov 2026; el doc aterrizó al repo con el arranque de la familia, en PR propia (regla de la casa). Refinado D1–D6 con David el 25-26 nov: sección «Refinado», abajo.
 
 ## Context and Problem Statement
 
@@ -94,6 +94,15 @@ Mientras tanto, cada capability que aterriza añade registros sin identidad: la 
 *   PR #70 — Multitenancy diferida: `MemorySearchFilters.tenant_id` → `None`; la restauración del filtro es cambio local en `_build_filter`.
 *   Propuesta de catálogos abiertos (sin issue aún) — taxonomía por inquilino: consumidora directa de la identidad resuelta aquí.
 
+## Post-implementación (26 nov 2026)
+
+- **La familia completa aterrizó en dos días (25–26 nov):** 001 provisión declarativa YAML + bootstrap (PR #119), 002 resolución en la frontera y fin de la auto-vivificación (PR #120), 003 actor de trazabilidad (PR #121), 004 titularidad por registro en la escritura (PR #122) y 005 visibilidad en el recall + backfill D1 (PR #123). Issues #112–#116 cerrados; cada fichero de cada escalón verificado byte a byte contra GitHub por blob SHA.
+- **D1–D6 se ejecutaron como se refinaron, con dos enmiendas ratificadas por David durante la ejecución:** el backfill D1 sella plano a `system_default` (DoD literal del issue, sin resolución de slug real por join — la re-atribución queda como opción futura, anotada en D5) y la cobertura del backfill incluye también la colección de imágenes.
+- **La superficie creció aditiva, sin tools nuevas:** `owner` opcional en `RecallTextRequest`/`RecallImageRequest` (`min_length=1`, rebotado del payload de tasks por `extra=forbid`), `MemorySearchFilters.owner` y `MemoryHit.owner`; `tools/list` sigue siendo exactamente las seis (cuatro de tasks + dos de recall) y el hueco de la PR #70 se restauró como filtro por `owner` en `_build_filter`.
+- **Verificación del 005:** unitarios de paridad retrocompatible (sin filtro = `filters.owner` `None`), filtro al sweep completo y a `images` (simetría), hit con la titularidad del punto, selector is_empty/is_null y error estructural del `ensure_owners`; E2E write-then-read en la VM de desarrollo 5/5 VERDE (26 nov): dispatch real de dos entidades del registro, recall con y sin owner, despacho omiso hallado por `owner=system_default`, simetría visual y 0 puntos sin owner en las cuatro colecciones tras el arranque. E2E de referencia: `scratch/e2e_adr_012_005_visibilidad_recall.py` (patrón de los #113–#115, pin mcp==2.1.1).
+- **La consecuencia negativa «registros históricos sin titularidad» quedó cerrada por D1:** `ensure_owners` corre en el arranque de worker y core-mcp, junto a `ensure_collections` — la regla de cierre es garantía de arranque (gemelo ensure_* del ADR-011), auditable en git.
+- **Lo que sigue SIN decidir este ADR:** catálogos abiertos, RBAC/permisos y la tool de registro runtime — cada uno abrirá su propio ADR consumiendo la identidad resuelta aquí.
+
 ---
 
 # ISSUES
@@ -111,4 +120,4 @@ Implementado y validado (26 nov; PR #121 mergeada a la rama padre). Free-string 
 Implementado y validado (26 nov; PR #122 mergeada a la rama padre). `owner` estampado desde el contexto en Qdrant y Postgres; separación explícita de `owner` y `visibility` (D3).
 
 ### [ADR-012-005] Visibilidad por registro en el recall + regla de cierre de históricos — #116
-En curso (26 nov). Filtro opcional de propietario en el recall (texto e imagen, simetría decidida por David), restauración del hueco de la PR #70 en `_build_filter` como filtro por `owner`, y backfill idempotente de históricos a `system_default` (D1, `ensure_owners` en el arranque).
+Completado (26 nov, PR #123): filtro opcional de propietario en el recall (texto e imagen, simetría decidida por David), restauración del hueco de la PR #70 en `_build_filter` como filtro por `owner`, hit con la titularidad del punto, y backfill idempotente de históricos a `system_default` (D1, `ensure_owners` en el arranque). E2E 5/5 en la VM de desarrollo.
