@@ -12,10 +12,17 @@ Decisiones que estos tests defienden (26 oct):
   embeber: un fallo de inicialización no se disfraza de no-match honesto.
 - Dif-cero: el recall no escribe NADA — ni factura en llm_audit, ni
   commit, ni upsert. La consulta (texto o imagen) es embed efímero.
-- Simetría de superficie: project, top_k y umbral viajan igual en texto e
-  imagen; sin filtro de tenant (identidad multi-tenant diferida).
+- Simetría de superficie: project, owner, top_k y umbral viajan igual en
+  texto e imagen; sin filtro de tenant (identidad multi-tenant diferida).
 - La tool valida la forma en el borde, ANTES de abrir sesión.
 - DoD: tools/list son EXACTAMENTE las cuatro de tasks + las dos de recall.
+
+Titularidad (ADR-012-005, #116):
+- Paridad retrocompatible: sin filtro de owner = comportamiento actual
+  (filters.owner es None, nadie pierde acceso al subir la familia).
+- Con filtro A: solo puntos owner=A — el filtro viaja a TODAS las
+  colecciones del sweep y a la colección de imágenes (simetría).
+- El hit devuelve el owner del punto: titularidad visible, nunca silenciosa.
 """
 
 import base64
@@ -32,7 +39,12 @@ from src.schemas.llm import (
     TEXT_EMBEDDING_MODEL,
 )
 from src.schemas.memory import DomainType
-from src.schemas.recall import MemoryHit, RecallResponse
+from src.schemas.recall import (
+    MemoryHit,
+    RecallImageRequest,
+    RecallResponse,
+    RecallTextRequest,
+)
 from src.repositories.vector import IMAGE_COLLECTION
 from src.managers.memory_manager import HybridMemoryManager, MissingCollectionError
 from src.mcp.tools.recall_tools import get_recall_tools, handle_recall_tool
@@ -150,10 +162,12 @@ async def test_recall_text_sweep_merge_y_top_k():
     assert dominios == [DomainType.DOCUMENT, DomainType.CONVERSATION, DomainType.SYSTEM]
 
     # 2. Filtros planos: project opcional + el top_k como limit de cada
-    #    búsqueda parcial
+    #    búsqueda parcial. Paridad retrocompatible (ADR-012-005): sin filtro
+    #    de owner, filters.owner es None — comportamiento actual.
     filters = vector_repo.search.call_args_list[0].kwargs["filters"]
     assert filters.tenant_id is None  # diferimiento defendido: sin filtro de tenant
     assert filters.project == "elios-workshop"
+    assert filters.owner is None
     assert filters.limit == 2
     assert filters.score_threshold == 0.7
 
@@ -164,6 +178,7 @@ async def test_recall_text_sweep_merge_y_top_k():
     assert hits[0].point_id == DOC_POINT_ID
     assert hits[0].content == "hit de documento"
     assert hits[0].project == "elios-workshop"
+    assert hits[0].owner is None  # punto sin owner en el payload: None, no inventado
     assert hits[1].session_id == "sesion-1"
 
     # 4. Embed EFÍMERO de consulta: grupo de texto, input = la query
@@ -173,6 +188,49 @@ async def test_recall_text_sweep_merge_y_top_k():
     assert request.input == "¿qué piezas se registraron?"
     assert request.modality is None
 
+    _assert_dif_cero(session, audit_repo, vector_repo)
+
+
+@pytest.mark.asyncio
+async def test_recall_text_filtro_owner_viaja_a_todo_el_sweep():
+    """
+    [ADR-012-005] #116, DoD: con filtro A, la búsqueda de cada colección
+    del sweep lleva owner=A — la titularidad se respeta como filtro en
+    TODAS las colecciones, no solo en la primera.
+    """
+    vector_repo = AsyncMock()
+    vector_repo.collection_names.return_value = {"document", "conversation", "system"}
+    vector_repo.search.return_value = []
+    manager, session, audit_repo, llm = _manager(vector_repo, _embedding_response())
+
+    await manager.recall_text(query="memorias del taller", owner="coreai-worker")
+
+    assert vector_repo.search.await_count == 3
+    for call in vector_repo.search.call_args_list:
+        assert call.kwargs["filters"].owner == "coreai-worker"
+    _assert_dif_cero(session, audit_repo, vector_repo)
+
+
+@pytest.mark.asyncio
+async def test_recall_text_hit_devuelve_owner_del_punto():
+    """
+    [ADR-012-005] #116: la titularidad viaja en el hit — clave plana del
+    payload al contrato de salida, nunca silenciosa (mismo criterio que el
+    entity_id del dispatch en el #113).
+    """
+    vector_repo = AsyncMock()
+    vector_repo.collection_names.return_value = {"document", "conversation", "system"}
+    vector_repo.search.side_effect = [
+        [_scored_point(DOC_POINT_ID, 0.93, {"content": "hit de documento", "owner": "coreai-worker"})],
+        [],
+        [],
+    ]
+    manager, session, audit_repo, llm = _manager(vector_repo, _embedding_response())
+
+    hits = await manager.recall_text(query="memorias del taller", owner="coreai-worker")
+
+    assert len(hits) == 1
+    assert hits[0].owner == "coreai-worker"
     _assert_dif_cero(session, audit_repo, vector_repo)
 
 
@@ -257,8 +315,37 @@ async def test_recall_image_happy_path():
     assert call.kwargs["domain"] == IMAGE_COLLECTION
     assert call.kwargs["filters"].tenant_id is None
     assert call.kwargs["filters"].project == "elios-workshop"
+    assert call.kwargs["filters"].owner is None  # paridad: sin filtro = None
     assert call.kwargs["filters"].score_threshold == 0.5
 
+    _assert_dif_cero(session, audit_repo, vector_repo)
+
+
+@pytest.mark.asyncio
+async def test_recall_image_filtro_owner_simetrico():
+    """
+    [ADR-012-005] #116, simetría decidida por David: el filtro de
+    titularidad también viaja al recall visual — los puntos de imagen
+    llevan owner estampado desde el #115, la identify los filtra igual.
+    """
+    vector_repo = AsyncMock()
+    vector_repo.collection_names.return_value = {"images"}
+    vector_repo.search.return_value = [
+        _scored_point(IMG_POINT_ID, 0.62, {"session_id": "sesion-1", "owner": "e2e-vision-115"}),
+    ]
+    manager, session, audit_repo, llm = _manager(vector_repo, _embedding_response())
+
+    hits = await manager.recall_image(
+        image_data_uri=VALID_IMAGE_DATA_URI,
+        owner="e2e-vision-115",
+        top_k=5,
+        score_threshold=0.5,
+    )
+
+    call = vector_repo.search.call_args
+    assert call.kwargs["filters"].owner == "e2e-vision-115"
+    assert len(hits) == 1
+    assert hits[0].owner == "e2e-vision-115"  # titularidad visible en el hit
     _assert_dif_cero(session, audit_repo, vector_repo)
 
 
@@ -342,7 +429,7 @@ async def test_tool_search_context_happy_path(
 
     hit = MemoryHit(
         point_id=SYS_POINT_ID, domain="system", score=0.9,
-        content="memoria del taller", session_id=None, project=None,
+        content="memoria del taller", session_id=None, project=None, owner=None,
     )
     manager = AsyncMock()
     manager.recall_text.return_value = [hit]
@@ -362,7 +449,40 @@ async def test_tool_search_context_happy_path(
     manager.recall_text.assert_awaited_once_with(
         query="memorias del taller",
         project=None,
+        owner=None,
         top_k=3,
+        score_threshold=0.7,
+    )
+
+
+@pytest.mark.asyncio
+@patch("src.mcp.tools.recall_tools.LLMClient")
+@patch("src.mcp.tools.recall_tools.HybridMemoryManager")
+@patch("src.mcp.tools.recall_tools.get_qdrant_client", new_callable=AsyncMock)
+@patch("src.mcp.tools.recall_tools.AsyncSessionLocal")
+async def test_tool_search_context_con_owner_delega_el_filtro(
+    mock_session_local, mock_get_qdrant, mock_manager_class, mock_llm_class
+):
+    """
+    [ADR-012-005] #116: el owner del request viaja íntegro hasta el
+    manager — la capa fina no filtra ni interpreta titularidad.
+    """
+    mock_session_local.return_value = _SessionCM()
+    manager = AsyncMock()
+    manager.recall_text.return_value = []
+    mock_manager_class.return_value = manager
+
+    response = await handle_recall_tool("coreai_search_context", {
+        "query": "memorias del taller",
+        "owner": "coreai-worker",
+    })
+
+    assert response["isError"] is False
+    manager.recall_text.assert_awaited_once_with(
+        query="memorias del taller",
+        project=None,
+        owner="coreai-worker",
+        top_k=5,
         score_threshold=0.7,
     )
 
@@ -380,7 +500,7 @@ async def test_tool_search_image_happy_path(
 
     hit = MemoryHit(
         point_id=IMG_POINT_ID, domain="images", score=0.55,
-        content=None, session_id="sesion-1", project="elios-workshop",
+        content=None, session_id="sesion-1", project="elios-workshop", owner=None,
     )
     manager = AsyncMock()
     manager.recall_image.return_value = [hit]
@@ -394,6 +514,7 @@ async def test_tool_search_image_happy_path(
     manager.recall_image.assert_awaited_once_with(
         image_data_uri=VALID_IMAGE_DATA_URI,
         project=None,
+        owner=None,
         top_k=5,
         score_threshold=0.5,
     )
@@ -421,6 +542,13 @@ async def test_tool_args_malformados_no_abren_sesion(mock_session_local):
     # Clave desconocida (extra=forbid: schemas planos y cerrados)
     response = await handle_recall_tool("coreai_search_context", {
         "query": "x", "clave_inventada": 1,
+    })
+    assert response["isError"] is True
+
+    # Owner vacío (min_length=1): un slug vacío no es una titularidad,
+    # es un typo — la forma se valida en el borde, como el project.
+    response = await handle_recall_tool("coreai_search_context", {
+        "query": "x", "owner": "",
     })
     assert response["isError"] is True
 
@@ -491,3 +619,20 @@ def test_dod_tools_list_exacta():
         "coreai_search_context",
         "coreai_search_image",
     }
+
+
+def test_dod_request_owner_es_opcional_y_retrocompatible():
+    """
+    DoD [ADR-012-005] #116: los schemas del recall aceptan el request SIN
+    owner (retrocompatibilidad — un cliente de ayer no se rompe hoy) y el
+    default es None, no un valor inventado.
+    """
+    base_text = {"query": "memorias"}
+    base_image = {"image": VALID_IMAGE_DATA_URI}
+
+    for arguments in (base_text,):
+        request = RecallTextRequest.model_validate(arguments)
+        assert request.owner is None
+
+    request = RecallImageRequest.model_validate(base_image)
+    assert request.owner is None
