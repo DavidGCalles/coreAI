@@ -1,47 +1,24 @@
 # Vision Document: [coreAI]
 
+> **Revision status (Nov 2026):** aligned with the repo's current doctrine (ADR-001 through ADR-012). Changes from the foundational version, with their reasons, live in the ADRs and in section 6 of the PRD.
+
 ## 1. Nature and Paradigm
-[coreAI] is not an application; it is sovereign infrastructure. It is conceived as the foundational transactional and cognitive layer for any future ecosystem of automations, agents, or interfaces. Its purpose is to act as the system's immutable source of truth (SoT), isolating the complexity of hybrid storage, inference routing, and async processing within a sealed core.
+[coreAI] is not an application; it is sovereign infrastructure. It is conceived as the transactional and cognitive base layer for any ecosystem of automations, agents, or future interfaces. Its purpose is to act as the immutable Source of Truth engine of a system, isolating the complexity of hybrid storage, inference routing, and asynchronous processing inside a hermetic core. It is a **substrate, not a brain**: the gateway routes, it does not think; interactive orchestration lives in the edge client; [coreAI] guarantees persistence, unified memory, and background processing.
 
 ## 2. Sovereignty and Agnosticism
-The system prioritizes absolute control over data and execution cycles, rejecting critical external dependencies.
-*   **By-Design Local-First:** Architected to deploy and operate with maximum efficiency on owned infrastructure and dedicated hardware, keeping sensitive data and heavy inference tasks within the local perimeter.
+The system prioritizes absolute control of data and the execution cycle, rejecting critical external dependencies.
+*   **Local-First by Design:** Architected to deploy and operate with maximum efficiency on owned infrastructure and dedicated hardware, keeping sensitive data and heavy inference workloads inside the local perimeter.
 *   **Interface Agnosticism:** [coreAI] is strictly *headless*. It actively ignores how its data is consumed or who requests it, delegating presentation, swarm orchestration, and interaction to external clients under strict authorization rules.
-*   **Model Agnosticism:** The system's cognition is fully decoupled from the inference provider. Through an integrated proxy, it ensures system survival against obsolescence, service outages, or policy changes from any external LLM.
+*   **Model Agnosticism:** The system's cognition is fully decoupled from the inference provider. Through an integrated proxy, it guarantees survival against obsolescence, service outages, or policy changes of any external LLM.
 
 ## 3. Unified Memory Architecture
-Persistence transcends the traditional database concept to become a temporal and relational context-resolution engine.
-*   **Structural Determinism:** A robust relational database (PostgreSQL) serves as the system's reality anchor. It guarantees event log immutability, referential integrity, and entity topology.
-*   **Semantic Abstraction:** The vector layer operates in strict subordination to the relational. It provides similarity-based retrieval and context expansion, but each vector is an appendix of a deterministic record, eliminating truth fragmentation.
+Persistence transcends the traditional database concept to become an engine of temporal and relational context resolution.
+*   **Structural Determinism:** A robust relational database (PostgreSQL) acts as the anchor of the system's reality. It guarantees the immutability of the event log, referential integrity, and entity topology.
+*   **Semantic Abstraction:** The vector layer (Qdrant) operates in strict subordination to the relational one. It provides similarity retrieval and context expansion, but every vector is an appendix of a deterministic record, eradicating the fragmentation of truth.
+*   **Identity and Ownership:** The substrate knows who dispatches: declarative entities governed at deployment, a traceability actor on every task, and per-record ownership with visibility respected in recall (ADR-012). The full permission model (RBAC) is explicitly deferred, and will consume this identity.
 
 ## 4. Capability Standardization (MCP Protocol)
-The system rejects coupling and ad-hoc integrations. Any sensor reading, file system write, or third-party code execution is exposed to the core exclusively through the Model Context Protocol (MCP) standard. [coreAI] acts as a dynamic tool registry, allowing the scaling of physical and logical system capabilities without altering its foundational code.
+The system rejects coupling and *ad-hoc* integrations. Every read, write, or query is exposed to the core exclusively through the Model Context Protocol (MCP) standard: a fixed surface of tools with formal contracts, validated at the frontier and published as resources (ADR-006). [coreAI] scales its capabilities additively, through deliberate review (ADR + PR), without altering its foundational code. *(Change from the foundational version: dynamic hot registration of tools was discarded in favor of the stability of the contract tenants consume.)*
 
 ## 5. Autonomous Cortex (Event-Driven)
-[coreAI] abandons the reactive model limitation (request-response). It implements an event bus and background consumers that allow the system to work in the shadows: consolidating and compressing episodic memories, auditing inconsistencies in the relational graph, and pre-computing contexts during off-peak hours. The system structures its own state even without external stimuli.
-
----
-
-## Español (Spanish Version)
-
-# Documento de Visión: [coreAI]
-
-## 1. Naturaleza y Paradigma
-[coreAI] no es una aplicación; es infraestructura soberana. Se concibe como la capa base transaccional y cognitiva para cualquier ecosistema de automatizaciones, agentes o interfaces futuras. Su propósito es actuar como el motor de verdad inmutable (Source of Truth) de un sistema, aislando la complejidad del almacenamiento híbrido, el enrutamiento de inferencia y el procesamiento asíncrono en un núcleo hermético.
-
-## 2. Soberanía y Agnosticismo
-El sistema prioriza el control absoluto de los datos y del ciclo de ejecución, rechazando dependencias críticas externas.
-*   **Local-First por Diseño:** Arquitectado para desplegarse y operar con máxima eficiencia en infraestructuras propias y hardware dedicado, reteniendo los datos sensibles y las tareas de inferencia pesadas dentro del perímetro local.
-*   **Agnosticismo de Interfaz:** [coreAI] es estrictamente *headless*. Ignora activamente cómo se consumen sus datos o quién los solicita, delegando la presentación, la orquestación de enjambres y la interacción a clientes externos bajo reglas estrictas de autorización.
-*   **Agnosticismo de Modelo:** La cognición del sistema está totalmente desacoplada del proveedor de inferencia. A través de un proxy integrado, garantiza la supervivencia del sistema frente a la obsolescencia, caídas de servicio o cambios de políticas de cualquier LLM externo.
-
-## 3. Arquitectura de Memoria Unificada
-La persistencia trasciende el concepto de base de datos tradicional para convertirse en un motor de resolución de contexto temporal y relacional.
-*   **Determinismo Estructural:** Una base de datos relacional robusta (PostgreSQL) actúa como el ancla de la realidad del sistema. Garantiza la inmutabilidad del registro de eventos, la integridad referencial y la topología de las entidades.
-*   **Abstracción Semántica:** La capa vectorial opera en estricta subordinación a la relacional. Proporciona recuperación por similitud y expansión de contexto, pero cada vector es un apéndice de un registro determinista, erradicando la fragmentación de la verdad.
-
-## 4. Estandarización de Capacidades (Protocolo MCP)
-El sistema rechaza el acoplamiento y las integraciones *ad-hoc*. Cualquier lectura de sensores, escritura en sistemas de archivos o ejecución de código de terceros se expone al núcleo exclusivamente a través del estándar Model Context Protocol (MCP). [coreAI] actúa como un registro de herramientas dinámico, permitiendo escalar las capacidades físicas y lógicas del sistema sin alterar su código fundacional.
-
-## 5. Córtex Autónomo (Event-Driven)
-[coreAI] abandona la limitación del modelo reactivo (petición-respuesta). Implementa un bus de eventos y consumidores en segundo plano que permiten al sistema trabajar en la sombra: consolida y comprime memorias episódicas, audita inconsistencias en el grafo relacional y pre-computa contextos en horas valle. El sistema estructura su propio estado aunque no reciba estímulos externos.
+[coreAI] abandons the limitation of the reactive (request-response) model. It implements an async cortex over a native relational queue (PostgreSQL with `SELECT ... FOR UPDATE SKIP LOCKED`, no external broker) with background consumers that let the system work in the shadows: it consolidates and compresses episodic memories, corrects the metadata of what is already stored without re-embedding (ADR-009), and keeps per-attempt audit trail in the DLQ. The system structures its own state even without external stimuli. *(Change from the foundational version: the "event bus" materialized as a native PostgreSQL queue — strong consistency and resilience without one more piece to operate.)*
