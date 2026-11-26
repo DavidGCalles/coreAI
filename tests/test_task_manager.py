@@ -68,8 +68,10 @@ async def test_task_manager_vivifica_sesion_ligada_a_la_entidad_resuelta(db_sess
     assert task_in_db.entity_id == resolved.id, "La tarea no nació titulada al despachante."
     assert task_in_db.status.value == "PENDING", "El estado inicial no es el correcto."
     assert task_in_db.payload["task_type"] == "extract_entities", "El type no se inyectó en el JSONB."
-    # El actor vive en el CONTEXTO de la tarea (JSONB), junto al task_type
-    assert task_in_db.payload["actor"] == "despachante-de-test"
+    # El actor vive en la COLUMNA de primer nivel (re-home #115): JAMÁS
+    # en el JSONB del payload
+    assert task_in_db.actor == "despachante-de-test"
+    assert "actor" not in task_in_db.payload, "El actor coló en el JSONB: el re-home no se aplicó."
 
     session_in_db = (await db_session.execute(
         select(Session).where(Session.id == response.session_id)
@@ -114,7 +116,7 @@ async def test_task_manager_sesion_explicita_no_duplica_y_titula_al_despachante(
         select(Task).where(Task.id == response.task_id)
     )).scalar_one()
     assert task_in_db.entity_id == despachante.id, "La task no quedó titulada al despachante."
-    assert task_in_db.payload["actor"] == "coreai-cron"
+    assert task_in_db.actor == "coreai-cron"
 
 @pytest.mark.asyncio
 async def test_task_manager_estampa_el_actor_por_omision_resuelto_por_la_frontera(db_session):
@@ -142,7 +144,7 @@ async def test_task_manager_estampa_el_actor_por_omision_resuelto_por_la_fronter
     task_in_db = (await db_session.execute(
         select(Task).where(Task.id == response.task_id)
     )).scalar_one()
-    assert task_in_db.payload["actor"] == "system_default"
-    # El actor jamás muta el payload del contrato: solo la clave de contexto
+    assert task_in_db.actor == "system_default"
+    # El actor jamás muta el payload del contrato: columna de primer nivel
     assert task_in_db.payload["task_type"] == "extract_entities"
     assert task_in_db.payload["raw_text"] == "Despacho sin actor explícito."

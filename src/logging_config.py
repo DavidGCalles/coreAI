@@ -20,10 +20,10 @@ completa del ciclo de vida de esa tarea (claim -> router -> handler ->
 manager -> COMPLETED/FAILED).
 
 Traza de actores (ADR-012-003, #114): mismo patrón, mismo filtro — el worker
-fija también el actor estampado en el contexto de la tarea (`actor=<slug o
-free-string>`) al reclamarla y lo suelta al cerrar su ciclo. En Loki/Grafana,
-`|= "actor=<valor>"` recorta la traza de una tarea a las líneas de QUIÉN
-despachó: la trazabilidad que la DLQ y su auditoría necesitan.
+fija también el actor estampado en la columna de primer nivel de la tarea
+(`actor=<slug o free-string>`) al reclamarla y lo suelta al cerrar su ciclo.
+En Loki/Grafana, `|= "actor=<valor>"` recorta la traza de una tarea a las
+líneas de QUIÉN despachó: la trazabilidad que la DLQ y su auditoría necesitan.
 """
 
 import contextvars
@@ -60,9 +60,10 @@ def clear_current_task_id() -> None:
 def set_current_actor(actor: Optional[str]) -> None:
     """
     Fija el actor de la tarea en ejecución (ADR-012-003, #114). Lo llama el
-    bucle del worker tras el claim, leyendo el actor del propio payload de
-    la tarea: lo estampó el dispatch (TaskManager) o no existe (tareas
-    históricas anteriores a la familia) y el filtro renderiza el "-".
+    bucle del worker tras el claim, leyendo la columna de primer nivel de
+    la tarea (re-home ADR-012-004, #115): la estampó el dispatch
+    (TaskManager) o no existe (tareas históricas anteriores a la familia)
+    y el filtro renderiza el "-".
     """
     _actor_context.set(actor if isinstance(actor, str) else None)
 

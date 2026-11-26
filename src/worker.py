@@ -164,12 +164,11 @@ async def worker_loop():
                     # en fail_task (que ya trabaja por UUID, sin tocar el ORM).
                     task_id = task.id
                     # El actor también se captura ANTES (misma máscara greenlet):
-                    # vive estampado en el JSONB desde el dispatch (ADR-012-003,
-                    # #114) — el declarado o el slug de la entidad resuelta. Las
-                    # tareas históricas anteriores a la familia no lo llevan: el
-                    # filtro renderiza el placeholder "-".
-                    payload_actual = task.payload if isinstance(task.payload, dict) else {}
-                    actor_actual = payload_actual.get("actor")
+                    # columna de primer nivel estampada por el dispatch desde el
+                    # re-home del #115 (el declarado o el slug de la entidad
+                    # resuelta). Las tareas históricas anteriores al re-home no
+                    # la llevan (NULL): el filtro renderiza el placeholder "-".
+                    actor_actual = task.actor
                     
                     try:
                         # Traza Loki por UUID (Issue 4.3, ADR-003): el contexto de

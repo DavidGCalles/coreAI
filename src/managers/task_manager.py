@@ -19,9 +19,8 @@ class TaskManager:
 
     [ADR-012-003] #114: el actor tampoco se resuelve aquí — la frontera fija
     el free-string de trazabilidad (declarado o default: el slug de la
-    entidad resuelta) y el manager solo lo ESTAMPA en el contexto de la tarea:
-    viaja en el JSONB junto al task_type, visible para handlers, logs y
-    error_history sin tocar la superficie física.
+    entidad resuelta) y el manager solo lo ESTAMPA en la fila (re-home del
+    #115): columna de primer nivel, JAMÁS enterrado en el JSONB del payload.
     """
     def __init__(
         self,
@@ -39,9 +38,9 @@ class TaskManager:
         """
         Ingiere la tarea YA resuelta en identidad (ADR-012-002) y YA resuelta
         en actor (ADR-012-003): la 'entity_id' y el 'actor' los resolvió la
-        frontera y aquí solo se estampan — la fila queda titulada al
-        despachante y el contexto de la tarea lleva la trazabilidad de quién
-        despachó, del dispatch a la auditoría de la DLQ.
+        frontera y aquí solo se estampan en PRIMER NIVEL relacional — la fila
+        queda titulada al despachante y con la trazabilidad de quién despachó,
+        del dispatch a la auditoría de la DLQ.
         """
         try:
             resolved_session_id = request.session_id
@@ -58,19 +57,17 @@ class TaskManager:
             # Aseguramos que el task_type viva dentro del payload sin alterar la tabla física
             final_payload = dict(request.task_payload)
             final_payload["task_type"] = request.task_type
-            # [ADR-012-003] #114: el actor viaja en el CONTEXTO de la tarea —
-            # visible para los handlers que lo consuman (la titularidad por
-            # registro del #115 beberá de aquí) y para la propia auditoría:
-            # retry_task lo lee del payload para enriquecer error_history y
-            # el worker lo fija en el contexto de logging. Sin columnas nuevas.
-            final_payload["actor"] = actor
 
-            # 3. INGESTA DE LA TAREA CON TITULARIDAD (ADR-012-002): la fila
-            #    nace del despachante — la DLQ de la 4.4 gana dueño sin
-            #    tocar su superficie.
+            # 3. INGESTA DE LA TAREA CON TITULARIDAD (ADR-012-002) Y ACTOR
+            #    (ADR-012-003, re-home del #115): la fila nace del despachante
+            #    y con el actor estampado como COLUMNA de primer nivel — la
+            #    identidad del sustrato JAMÁS enterrada en el JSONB del
+            #    payload. El contrato (extra=forbid) ya rebotó cualquier
+            #    'actor' espurio en la frontera: esta es la única pluma.
             new_task = await self.task_repo.create(
                 session_id=resolved_session_id,
                 entity_id=entity_id,
+                actor=actor,
                 payload=final_payload
             )
 

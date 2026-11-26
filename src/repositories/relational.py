@@ -180,13 +180,14 @@ class TaskRepository(BaseRepository[Task]):
         None si la fila no existe (el worker solo lo registra).
         """
         result = await self.session.execute(
-            select(Task.retry_count, Task.payload).where(Task.id == task_id)
+            select(Task.retry_count, Task.payload, Task.actor).where(Task.id == task_id)
         )
         fila = result.one_or_none()
         if fila is None:
             return None
         retry_count = fila.retry_count or 0
         current_payload = fila.payload
+        current_actor = fila.actor
 
         config = config_manager.get_retry_config()
         max_retries = config["max_retries"]
@@ -195,17 +196,18 @@ class TaskRepository(BaseRepository[Task]):
         # entrada con intento, instante y traza — la auditoría de la DLQ
         # lógica y su lectura MCP (4.4-003) se apoyan aquí.
         # [ADR-012-003] #114: la entrada se enriquece con el actor — el mismo
-        # free-string que el dispatch estampó en el propio JSONB, leído aquí
-        # para que cada intento de la DLQ diga QUIÉN lo despachó (apto Grafana).
-        # Tareas históricas anteriores a la familia: sin actor → None, la
-        # auditoría no se reescribe, solo se enriquece hacia adelante.
+        # free-string que el dispatch estampó en la COLUMNA de primer nivel
+        # (re-home del #115), leído aquí para que cada intento de la DLQ diga
+        # QUIÉN lo despachó (apto Grafana). Tareas históricas anteriores al
+        # re-home: columna NULL → None; la auditoría no se reescribe, solo se
+        # enriquece hacia adelante.
         payload_copy = dict(current_payload) if isinstance(current_payload, dict) else {}
         history = list(payload_copy.get("error_history", []))
         history.append({
             "attempt": retry_count + 1,
             "at": datetime.now(timezone.utc).isoformat(),
             "trace": error_msg,
-            "actor": payload_copy.get("actor"),
+            "actor": current_actor,
         })
         payload_copy["error_history"] = history
         payload_copy["error_trace"] = error_msg
