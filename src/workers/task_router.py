@@ -525,11 +525,23 @@ async def handle_amend_memory_point(task: Task, session: AsyncSession) -> None:
     La identidad multi-tenant queda diferida como en el recall: el
     payload del punto conserva su tenant_id; el aislamiento por
     inquilino es su propia pieza de diseño.
+
+    Traza del corrector ([ADR-012-004] #115): el amend NO reescribe la
+    titularidad del punto (su owner queda intocado) — solo estampa QUIÉN
+    corrigió, en claves planas amend_entity + amend_actor (slug del
+    despachante y actor) en el punto y en su propia task row, junto a
+    amended_collection/old_project. SET idempotente por ambas orillas:
+    el re-dispatch converge, cero historial creciente.
     """
     # Máscara greenlet (lección #61): el rollback expira la instancia
     # task y task.* revienta con MissingGreenlet reemplazando al error
-    # real. El id se captura ANTES de cualquier await.
+    # real. El id se captura ANTES de cualquier await. La traza del
+    # corrector ([ADR-012-004] #115) necesita además la titularidad y el
+    # actor del DESPACHO (columnas de primer nivel, #113 y #115): misma
+    # captura temprana, mismos ojos verdes.
     task_id = task.id
+    titular_del_amend = task.entity_id
+    actor_del_amend = task.actor
     logger.info("  [Worker] Corrigiendo metadata de punto para la tarea %s", task_id)
 
     payload = task.payload
@@ -588,10 +600,26 @@ async def handle_amend_memory_point(task: Task, session: AsyncSession) -> None:
         # FASE 4: set_payload en Qdrant (el read path del recall) —
         # set idempotente, sin tocar el vector
         # =================================================================
+        # Traza del corrector ([ADR-012-004] #115): el amend NO reescribe
+        # la titularidad del punto (owner intocado) — solo estampa QUIÉN
+        # corrigió, en claves planas junto al project. El slug del
+        # despachante se resuelve a la escritura (mismo join del backfill
+        # #116); sin columna estampada (amend pre-familia) o sin slug
+        # (entidad legada), la clave queda None — honesta como el
+        # actor=None de error_history.
+        amend_entity = (
+            await EntityRepository(session).get_slug(titular_del_amend)
+            if titular_del_amend is not None
+            else None
+        )
         await vector_repo.amend_payload(
             collection_name=collection,
             point_id=str(point_id),
-            fields={"project": nuevo_project},
+            fields={
+                "project": nuevo_project,
+                "amend_entity": amend_entity,
+                "amend_actor": actor_del_amend,
+            },
         )
 
         # =================================================================
@@ -611,12 +639,20 @@ async def handle_amend_memory_point(task: Task, session: AsyncSession) -> None:
                 )
 
         # El propio evento de corrección queda como traza audible: colección
-        # donde vive el punto y valor previo, en su task row (append-only: los
-        # registros origen no se reescriben). Sin commit: la transacción
-        # pertenece al ciclo del worker (complete_task asienta).
+        # donde vive el punto, valor previo y QUIÉN corrigió ([ADR-012-004]
+        # #115), en su task row (append-only: los registros origen no se
+        # reescriben). Sin commit: la transacción pertenece al ciclo del
+        # worker (complete_task asienta).
         await task_repo.set_payload_fields(
             task_id,
-            {"amended_collection": collection, "old_project": old_project},
+            {
+                "amended_collection": collection,
+                "old_project": old_project,
+                # Espejo relacional del corrector: mismas claves planas del
+                # punto — idéntico SET idempotente, misma convergencia.
+                "amend_entity": amend_entity,
+                "amend_actor": actor_del_amend,
+            },
         )
 
         logger.info(
