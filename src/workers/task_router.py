@@ -248,7 +248,10 @@ async def handle_vectorize_image_event(task: Task, session: AsyncSession) -> Non
             f"sesión inexistente ({task.session_id})."
         )
 
-    entity_id = db_session.entity_id
+    # Titularidad por registro ([ADR-012-004] #115): el punto queda a nombre
+    # del DESPACHANTE (tasks.entity_id, #113); fallback de legado por sesión
+    # para las tasks pre-familia aún PENDING, documentado.
+    entity_id = task.entity_id or db_session.entity_id
 
     # =================================================================
     # FASE 2: Extracción Estricta (sin extracción tolerante — ADR-006)
@@ -280,6 +283,11 @@ async def handle_vectorize_image_event(task: Task, session: AsyncSession) -> Non
         vector_repo = VectorRepository(client=qdrant_client)
         audit_repo = LLMAuditRepository(session)
         llm_client = LLMClient()
+
+        # Owner legible a la escritura ([ADR-012-004] #115): slug de la
+        # entidad titular, join contra el registro (mismo helper del
+        # backfill #116). None honesto para entidades legadas sin slug.
+        owner = await EntityRepository(session).get_slug(entity_id)
 
         # =================================================================
         # FASE 4: Embedding vía GATEWAY LiteLLM (entrada image-embedding)
@@ -325,6 +333,9 @@ async def handle_vectorize_image_event(task: Task, session: AsyncSession) -> Non
         # El content (BUG-009 #84) sí viaja TAL CUAL: clave plana legible,
         # simétrica con los puntos de texto — el recall la mapea al hit
         # (presente si se registró, None si no: retrocompatible).
+        # El owner ([ADR-012-004] #115) completa la simetría de identidad
+        # de los puntos de texto: slug legible del titular junto al
+        # tenant_id preexistente (D3: aislamiento ≠ titularidad).
         point_payload = {
             "tenant_id": str(entity_id),
             "session_id": str(task.session_id),
@@ -332,6 +343,7 @@ async def handle_vectorize_image_event(task: Task, session: AsyncSession) -> Non
             "visibility": visibility.value,
             "content": content,
             "project": project,
+            "owner": owner,
         }
         await vector_repo.upsert_image(
             point_id=task.id,
