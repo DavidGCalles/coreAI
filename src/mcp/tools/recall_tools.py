@@ -29,18 +29,22 @@ logger = logging.getLogger(__name__)
 SEARCH_CONTEXT_DESCRIPTION = (
     "Búsqueda semántica read-only sobre la memoria de texto: "
     "recorre todas las colecciones de texto, ordena por similitud y devuelve "
-    "los top_k resultados con su score y su colección de origen. Sin "
-    "resultados sobre el umbral = no-match honesto (lista vacía). Cero "
-    "mutación: no crea tareas ni escribe memoria; la consistencia con las "
-    "ingestas es eventual — consulta las tareas con coreai_get_task."
+    "los top_k resultados con su score y su colección de origen. Filtro "
+    "opcional de owner (slug de la entidad titular) para acotar los "
+    "resultados a una titularidad; sin filtro, toda la memoria visible "
+    "hoy. Sin resultados sobre el umbral = no-match honesto (lista "
+    "vacía). Cero mutación: no crea tareas ni escribe memoria; la "
+    "consistencia con las ingestas es eventual — consulta las tareas con "
+    "coreai_get_task."
 )
 
 SEARCH_IMAGE_DESCRIPTION = (
     "Búsqueda por similitud visual read-only (identify): envía una imagen de "
     "consulta (data URI raster) y devuelve los top_k puntos más parecidos de "
     "la memoria de imágenes con su score, o un no-match honesto si nada "
-    "supera el umbral. La imagen de consulta NO se persiste (embed efímero) "
-    "y no se crea ninguna tarea."
+    "supera el umbral. Filtro opcional de owner (slug de la entidad titular), "
+    "simétrico con la búsqueda de texto. La imagen de consulta NO se "
+    "persiste (embed efímero) y no se crea ninguna tarea."
 )
 
 
@@ -98,6 +102,7 @@ async def handle_recall_tool(name: str, arguments: dict) -> dict:
                 hits = await manager.recall_text(
                     query=request.query,
                     project=request.project,
+                    owner=request.owner,
                     top_k=request.top_k,
                     score_threshold=request.score_threshold,
                 )
@@ -105,6 +110,7 @@ async def handle_recall_tool(name: str, arguments: dict) -> dict:
                 hits = await manager.recall_image(
                     image_data_uri=request.image,
                     project=request.project,
+                    owner=request.owner,
                     top_k=request.top_k,
                     score_threshold=request.score_threshold,
                 )
