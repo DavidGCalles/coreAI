@@ -112,14 +112,17 @@ pytest
 src/
   config/        # litellm_config.edge.yaml, provisioning de Prometheus/Grafana, entities.example.yaml
   contracts/     # Registro central de contratos de tarea (ADR-006-001)
-  db/            # SQLAlchemy: modelos, bootstrap del esquema al arranque (BUG-010), sesiones, repositorios
+  db/            # SQLAlchemy: modelos, bootstrap del esquema al arranque (BUG-010), sesiones, entities_config
+  repositories/  # Patrón repositorio: relacional (PostgreSQL) + vectorial (Qdrant)
   managers/      # TaskManager, HybridMemoryManager, LLMClient, ConfigManager
-  mcp/tools/     # Superficie MCP (coreai_dispatch_task, coreai_get_task, coreai_search_context, coreai_search_image)
+  mcp/tools/     # Superficie MCP: dispatch/get/list/retry de tareas + recall de texto e imagen
+  mcp/resources/ # Contratos de tarea expuestos como MCP resources (ADR-006)
   schemas/       # Contratos Pydantic: tasks, memory, llm, recall
   workers/       # Router del córtex: TASK_REGISTRY + handlers por tipo de tarea
+  logging_config.py  # Configuración de logging
   main.py        # Frontera MCP: STDIO + streamable HTTP (--serving stdio|http|dual)
   worker.py      # Bucle del worker
-docs/            # PRD, vision, moscow, roadmap (es/en) + adr/
+docs/            # PRD, vision, moscow, roadmap (es/en) + adr/ + issues/ (épicas 1-4)
 tests/           # Suite pytest (BD de test protegida por cortafuegos en conftest)
 scripts/         # prepare_model (+ prepare_clip_kit), schedulers/crontab
 ```
