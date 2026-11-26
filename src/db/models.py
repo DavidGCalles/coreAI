@@ -115,6 +115,15 @@ class Task(Base):
     entity_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey('entities.id'), nullable=True
     )
+
+    # Actor de trazabilidad (ADR-012-003, #114): free-string de QUIÉN despacha
+    # dentro del namespace de la entidad — el declarado o, por omisión, el
+    # slug de la entidad resuelta. Re-homed del JSONB del payload a PRIMER
+    # NIVEL relacional (ADR-012-004, #115): la identidad del sustrato no vive
+    # enterrada en una columna JSON. Nullable por la regla aditiva (ADR-011):
+    # las filas anteriores al re-home no se reescriben — el techo de 128 es
+    # el mismo que MAX_ACTOR_LENGTH de la frontera (src/schemas/tasks.py).
+    actor: Mapped[str | None] = mapped_column(String(128), nullable=True)
     
     status: Mapped[TaskStatus] = mapped_column(
         SQLEnum(

@@ -720,8 +720,9 @@ async def test_mcp_dispatch_identidad_charset_invalido_rebota(db_session):
     assert after == before, f"El rechazo mutó la BD: antes {before}, después {after}"
 
 # =====================================================================
-# ADR-012-003 (#114): actor en el contexto de la tarea — free-string de
-# trazabilidad, default = slug de la entidad resuelta, jamás veneno
+# ADR-012-003 (#114), re-home ADR-012-004 (#115): actor en la COLUMNA de
+# primer nivel de la tarea — free-string de trazabilidad, default = slug
+# de la entidad resuelta, jamás veneno y jamás en el JSONB (D6)
 # =====================================================================
 
 async def _limpiar_task_y_sesion(db_session, task_id):
@@ -765,8 +766,10 @@ async def test_mcp_dispatch_actor_por_omision_es_el_slug_resuelto(db_session):
     task_in_db = (await db_session.execute(
         select(Task).where(Task.id == uuid.UUID(content["task_id"]))
     )).scalar_one()
-    # El actor viaja en el CONTEXTO de la tarea (JSONB), consumible por handlers
-    assert task_in_db.payload["actor"] == "system_default"
+    # [ADR-012-004] #115 re-home: el actor viaja en la COLUMNA de primer
+    # nivel; el JSONB queda limpio de identidad (D6).
+    assert task_in_db.actor == "system_default"
+    assert "actor" not in task_in_db.payload
 
     await _limpiar_task_y_sesion(db_session, task_in_db.id)
 
@@ -774,8 +777,8 @@ async def test_mcp_dispatch_actor_por_omision_es_el_slug_resuelto(db_session):
 async def test_mcp_dispatch_actor_explicito_se_estampa_integro(db_session):
     """
     Actor explícito: el free-string viaja íntegro (sin normalizar más allá
-    del strip y sin interpretarlo), en la respuesta, en el contexto y con
-    la identidad resuelta de siempre.
+    del strip y sin interpretarlo), en la respuesta, en la COLUMNA de la
+    fila y con la identidad resuelta de siempre.
     """
     await _purge_entity_by_slug(db_session, "frontier-actor")
     declared = Entity(role="user", slug="frontier-actor")
@@ -798,7 +801,9 @@ async def test_mcp_dispatch_actor_explicito_se_estampa_integro(db_session):
     task_in_db = (await db_session.execute(
         select(Task).where(Task.id == uuid.UUID(content["task_id"]))
     )).scalar_one()
-    assert task_in_db.payload["actor"] == "david-gomez"
+    # Re-home #115: columna de primer nivel, JSONB limpio de identidad
+    assert task_in_db.actor == "david-gomez"
+    assert "actor" not in task_in_db.payload
 
     await _purge_entity_by_slug(db_session, "frontier-actor")
 

@@ -20,7 +20,7 @@ from src.managers.memory_manager import HybridMemoryManager
 from src.db.models import DomainType, Visibility
 
 import uuid
-from src.repositories.relational import EventRepository, LLMAuditRepository, SessionRepository, TaskRepository
+from src.repositories.relational import EntityRepository, EventRepository, LLMAuditRepository, SessionRepository, TaskRepository
 from src.repositories.vector import IMAGE_COLLECTION, VectorRepository
 from src.managers.memory_manager import HybridMemoryManager
 from src.managers.llm_client import LLMClient
@@ -109,8 +109,14 @@ async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
             f"Inconsistencia relacional fatal: La tarea {task.id} apunta a una "
             f"sesión inexistente ({task.session_id})."
         )
-    
-    entity_id = db_session.entity_id
+
+    # Titularidad por registro ([ADR-012-004] #115): la escritura queda a
+    # nombre del DESPACHANTE (tasks.entity_id, estampada por la frontera
+    # en el #113), no de la sesión. Fallback de legado: una task pre-familia
+    # aún PENDING llegó sin columna estampada → titularidad por sesión,
+    # documentada (idéntico al actor=None de error_history: la historia no
+    # se reescribe a destiempo).
+    entity_id = task.entity_id or db_session.entity_id
 
     # =================================================================
     # FASE 2: Extracción Estricta (purga de la extracción tolerante, 4.3)
@@ -159,6 +165,13 @@ async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
             llm_client=llm_client
         )
 
+        # Owner legible a la escritura ([ADR-012-004] #115): slug de la
+        # entidad titular, join contra el registro (entities) — el mismo
+        # helper del backfill (#116). None honesto si la entidad es
+        # histórica sin slug (pre-ADR-012-001). El tenant_id preexistente
+        # del punto NO se toca: D3 en ambas direcciones.
+        owner = await EntityRepository(session).get_slug(entity_id)
+
         # =================================================================
         # FASE 4: Ejecución Transaccional
         # =================================================================
@@ -167,7 +180,8 @@ async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
             domain=DomainType(domain_str.lower()),
             content=content,
             visibility=Visibility(visibility_str.lower()),
-            project=project
+            project=project,
+            owner=owner
         )
 
         logger.info("  [Worker] Vectorización completada con éxito para task %s", task.id)
@@ -234,7 +248,10 @@ async def handle_vectorize_image_event(task: Task, session: AsyncSession) -> Non
             f"sesión inexistente ({task.session_id})."
         )
 
-    entity_id = db_session.entity_id
+    # Titularidad por registro ([ADR-012-004] #115): el punto queda a nombre
+    # del DESPACHANTE (tasks.entity_id, #113); fallback de legado por sesión
+    # para las tasks pre-familia aún PENDING, documentado.
+    entity_id = task.entity_id or db_session.entity_id
 
     # =================================================================
     # FASE 2: Extracción Estricta (sin extracción tolerante — ADR-006)
@@ -266,6 +283,11 @@ async def handle_vectorize_image_event(task: Task, session: AsyncSession) -> Non
         vector_repo = VectorRepository(client=qdrant_client)
         audit_repo = LLMAuditRepository(session)
         llm_client = LLMClient()
+
+        # Owner legible a la escritura ([ADR-012-004] #115): slug de la
+        # entidad titular, join contra el registro (mismo helper del
+        # backfill #116). None honesto para entidades legadas sin slug.
+        owner = await EntityRepository(session).get_slug(entity_id)
 
         # =================================================================
         # FASE 4: Embedding vía GATEWAY LiteLLM (entrada image-embedding)
@@ -311,6 +333,9 @@ async def handle_vectorize_image_event(task: Task, session: AsyncSession) -> Non
         # El content (BUG-009 #84) sí viaja TAL CUAL: clave plana legible,
         # simétrica con los puntos de texto — el recall la mapea al hit
         # (presente si se registró, None si no: retrocompatible).
+        # El owner ([ADR-012-004] #115) completa la simetría de identidad
+        # de los puntos de texto: slug legible del titular junto al
+        # tenant_id preexistente (D3: aislamiento ≠ titularidad).
         point_payload = {
             "tenant_id": str(entity_id),
             "session_id": str(task.session_id),
@@ -318,6 +343,7 @@ async def handle_vectorize_image_event(task: Task, session: AsyncSession) -> Non
             "visibility": visibility.value,
             "content": content,
             "project": project,
+            "owner": owner,
         }
         await vector_repo.upsert_image(
             point_id=task.id,
@@ -401,8 +427,11 @@ async def handle_consolidate_memory(task: Task, session: AsyncSession) -> None:
             f"Inconsistencia relacional fatal: La tarea {task.id} apunta a una "
             f"sesión inexistente ({task.session_id})."
         )
-    
-    entity_id = db_session.entity_id
+
+    # Titularidad por registro ([ADR-012-004] #115): el resumen queda a
+    # nombre del despachante (tasks.entity_id, #113); fallback de legado
+    # por sesión para las tasks pre-familia aún PENDING.
+    entity_id = task.entity_id or db_session.entity_id
 
     # =================================================================
     # FASE 3: Inyección de Dependencias
@@ -423,13 +452,19 @@ async def handle_consolidate_memory(task: Task, session: AsyncSession) -> None:
             llm_client=llm_client
         )
 
+        # Owner del consolidate = la entidad de su contexto, sin
+        # re-atribución v1 ([ADR-012-004] #115): slug del titular a la
+        # escritura, mismo join del backfill (#116).
+        owner = await EntityRepository(session).get_slug(entity_id)
+
         # =================================================================
         # FASE 4: Ejecución Transaccional (Orquestador Híbrido)
         # =================================================================
         await memory_manager.consolidate_memory(
             entity_id=entity_id,
             domain=DomainType(domain_str.lower()),
-            time_window=time_window_str
+            time_window=time_window_str,
+            owner=owner
         )
 
         logger.info("  [Worker] Consolidación de memoria completada con éxito para task %s", task.id)
@@ -490,11 +525,23 @@ async def handle_amend_memory_point(task: Task, session: AsyncSession) -> None:
     La identidad multi-tenant queda diferida como en el recall: el
     payload del punto conserva su tenant_id; el aislamiento por
     inquilino es su propia pieza de diseño.
+
+    Traza del corrector ([ADR-012-004] #115): el amend NO reescribe la
+    titularidad del punto (su owner queda intocado) — solo estampa QUIÉN
+    corrigió, en claves planas amend_entity + amend_actor (slug del
+    despachante y actor) en el punto y en su propia task row, junto a
+    amended_collection/old_project. SET idempotente por ambas orillas:
+    el re-dispatch converge, cero historial creciente.
     """
     # Máscara greenlet (lección #61): el rollback expira la instancia
     # task y task.* revienta con MissingGreenlet reemplazando al error
-    # real. El id se captura ANTES de cualquier await.
+    # real. El id se captura ANTES de cualquier await. La traza del
+    # corrector ([ADR-012-004] #115) necesita además la titularidad y el
+    # actor del DESPACHO (columnas de primer nivel, #113 y #115): misma
+    # captura temprana, mismos ojos verdes.
     task_id = task.id
+    titular_del_amend = task.entity_id
+    actor_del_amend = task.actor
     logger.info("  [Worker] Corrigiendo metadata de punto para la tarea %s", task_id)
 
     payload = task.payload
@@ -553,10 +600,26 @@ async def handle_amend_memory_point(task: Task, session: AsyncSession) -> None:
         # FASE 4: set_payload en Qdrant (el read path del recall) —
         # set idempotente, sin tocar el vector
         # =================================================================
+        # Traza del corrector ([ADR-012-004] #115): el amend NO reescribe
+        # la titularidad del punto (owner intocado) — solo estampa QUIÉN
+        # corrigió, en claves planas junto al project. El slug del
+        # despachante se resuelve a la escritura (mismo join del backfill
+        # #116); sin columna estampada (amend pre-familia) o sin slug
+        # (entidad legada), la clave queda None — honesta como el
+        # actor=None de error_history.
+        amend_entity = (
+            await EntityRepository(session).get_slug(titular_del_amend)
+            if titular_del_amend is not None
+            else None
+        )
         await vector_repo.amend_payload(
             collection_name=collection,
             point_id=str(point_id),
-            fields={"project": nuevo_project},
+            fields={
+                "project": nuevo_project,
+                "amend_entity": amend_entity,
+                "amend_actor": actor_del_amend,
+            },
         )
 
         # =================================================================
@@ -576,12 +639,20 @@ async def handle_amend_memory_point(task: Task, session: AsyncSession) -> None:
                 )
 
         # El propio evento de corrección queda como traza audible: colección
-        # donde vive el punto y valor previo, en su task row (append-only: los
-        # registros origen no se reescriben). Sin commit: la transacción
-        # pertenece al ciclo del worker (complete_task asienta).
+        # donde vive el punto, valor previo y QUIÉN corrigió ([ADR-012-004]
+        # #115), en su task row (append-only: los registros origen no se
+        # reescriben). Sin commit: la transacción pertenece al ciclo del
+        # worker (complete_task asienta).
         await task_repo.set_payload_fields(
             task_id,
-            {"amended_collection": collection, "old_project": old_project},
+            {
+                "amended_collection": collection,
+                "old_project": old_project,
+                # Espejo relacional del corrector: mismas claves planas del
+                # punto — idéntico SET idempotente, misma convergencia.
+                "amend_entity": amend_entity,
+                "amend_actor": actor_del_amend,
+            },
         )
 
         logger.info(

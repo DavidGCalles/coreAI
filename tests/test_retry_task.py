@@ -63,7 +63,10 @@ async def setup_running_task(db_session):
 
     task = await task_repo.create(
         session_id=session_db.id,
-        payload={"task_type": "dummy_test_task", "extra": "dato-del-inquilino", "actor": "lane-de-test"},
+        payload={"task_type": "dummy_test_task", "extra": "dato-del-inquilino"},
+        # [ADR-012-004] #115 re-home: el actor estampa en la COLUMNA de
+        # primer nivel, jamás en el JSONB del payload.
+        actor="lane-de-test",
     )
     await db_session.commit()
 
@@ -126,9 +129,10 @@ async def test_retry_transitorio_difiere_y_cuenta(db_session, setup_running_task
 @pytest.mark.asyncio
 async def test_error_history_enriquece_con_el_actor_del_contexto(db_session, setup_running_task):
     """
-    [ADR-012-003] #114: cada entrada de error_history lleva el actor
-    estampado en el contexto de la tarea — la DLQ dice QUIÉN despachó cada
-    intento (apto Grafana). El actor lo leyó retry_task del propio JSONB.
+    [ADR-012-003] #114, re-home [ADR-012-004] #115: cada entrada de
+    error_history lleva el actor — la DLQ dice QUIÉN despachó cada intento
+    (apto Grafana). retry_task lo lee de la COLUMNA de primer nivel: la
+    identidad no viaja por el JSONB (D6).
     """
     repo = TaskRepository(db_session)
 
@@ -142,23 +146,27 @@ async def test_error_history_enriquece_con_el_actor_del_contexto(db_session, set
         assert entrada["actor"] == "lane-de-test", (
             "Cada intento de la DLQ debe llevar el actor del dispatch"
         )
-    # El actor de CONTEXTO del payload sigue intacto: solo se enriquece el
-    # historial, el contexto no se reescribe.
-    assert tarea.payload["actor"] == "lane-de-test"
+    # El actor vive en la columna (re-home #115): el JSONB queda limpio de
+    # identidad y solo el historial se enriquece.
+    assert tarea.actor == "lane-de-test"
+    assert "actor" not in tarea.payload
 
 
 @pytest.mark.asyncio
 async def test_error_history_tarea_historica_sin_actor_queda_en_none(db_session, setup_running_task):
     """
-    [ADR-012-003] #114: una tarea histórica (anterior a la familia, sin actor
-    estampado) agrega entradas con actor None — la auditoría no se reescribe
-    ni se inventa trazabilidad que nunca existió.
+    [ADR-012-003] #114: una tarea histórica (anterior a la familia, con la
+    columna actor vacía) agrega entradas con actor None — la auditoría no
+    se reescribe ni se inventa trazabilidad que nunca existió.
     """
     db_session.expunge_all()
     await db_session.execute(
         update(Task)
         .where(Task.id == setup_running_task)
-        .values({Task.payload: {"task_type": "dummy_test_task", "extra": "legado-pre-familia"}})
+        .values({
+            Task.payload: {"task_type": "dummy_test_task", "extra": "legado-pre-familia"},
+            Task.actor: None,
+        })
     )
     await db_session.commit()
 
@@ -168,8 +176,9 @@ async def test_error_history_tarea_historica_sin_actor_queda_en_none(db_session,
 
     tarea = await _leer(db_session, setup_running_task)
     entrada = tarea.payload["error_history"][0]
-    assert entrada["actor"] is None, "Sin actor en el contexto, la entrada queda en None."
-    assert "actor" not in tarea.payload or tarea.payload["actor"] is None
+    assert entrada["actor"] is None, "Sin actor en la columna, la entrada queda en None."
+    assert tarea.actor is None
+    assert "actor" not in tarea.payload
 
 
 @pytest.mark.asyncio

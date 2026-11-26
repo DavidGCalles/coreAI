@@ -75,12 +75,14 @@ Mientras tanto, cada capability que aterriza añade registros sin identidad: la 
 *   Bad, porque el registro sin fricción de revisión degrada el veneno: `david1` se registra tan fácil como se vivificaría.
 *   Neutral, porque no se descarta para siempre: la abrirá un diff entre dos clientes reales que la necesiten, en su propio ADR.
 
-## Refinado (25 nov 2026, chat con David)
+## Refinado (25-26 nov 2026, chat con David)
 
 - **D1 — Regla de cierre de históricos:** backfill idempotente a `system_default` en el propio bootstrap (se ejecuta en [ADR-012-005] #116); nadie pierde acceso al subir la familia y la regla queda auditable en git.
 - **D2 — Declaración de entidades:** fichero **YAML montado** en el despliegue ([ADR-012-001] #112); la env var queda descartada: cualquier aplicación consumidora podría leerse el env de entidades según el caso de uso.
 - **D3 — owner ≠ visibility:** la titularidad (`owner`, metadata nueva) y el flag `visibility` preexistente son dos conceptos separados ([ADR-012-004] #115); base del RBAC posterior y del cruce de conocimientos entre propietarios, sin fusión ni renombrado.
 - **D4 — Alcance del veneno:** la entidad declarada y no registrada es fallo determinista en TODAS las task types ([ADR-012-002] #113); la frontera es una sola.
+- **D5 — Resolución del slug a la escritura:** sin columna slug duplicada en `tasks` (doble verdad de la misma entidad); el `owner` del punto Qdrant es el slug de la entidad titular resuelto a la escritura con un join contra `entities` — el mismo helper que reutiliza el backfill de #116. Fallback de legado: task pre-familia aún PENDING sin columna estampada → titularidad por sesión, documentada (idéntico al actor `None` de `error_history`).
+- **D6 — Identidad en primer nivel relacional (26 nov, David):** actor y titularidad viven en COLUMNAS (`tasks.actor`, `tasks.entity_id`), JAMÁS enterrados en el JSONB del contexto ([ADR-012-003] #114 re-homeado, [ADR-012-004] #115): un `actor`/`owner` en el `task_payload` rebota por `extra=forbid` — nada de identidad viaja por contrato. `tenant_id` preexistente de los puntos queda intacto (D3 en ambas direcciones: aislamiento de cómputo ≠ titularidad legible); el owner del punto es el slug, el amend NO reescribe titularidad — estampa `amend_entity`/`amend_actor` idempotentes como traza del corrector; el residuo JSONB de la ventana pre-re-home se respeta como historia (append-only).
 - **Orden de ejecución:** esta familia precede a la del ADR-010 (#93): cada capability que aterrice sin identidad amplía el retro-fit que la visibilidad deberá cubrir después.
 
 ## Related

@@ -7,6 +7,8 @@ real y sin gateway real. Valida:
 - No-op limpio cuando la ventana no trae candidatos.
 - Happy path: resumen LLM → inyección dual → marca de orígenes → UN commit.
 - Visibilidad del resumen = la más restrictiva de sus orígenes.
+- Owner del resumen = la entidad de su contexto ([ADR-012-004] #115): slug
+  legible como clave plana del punto, sin re-atribución v1.
 - Cortafuegos: fallo en el upsert vectorial → rollback, nada a medias.
 - Resumen vacío del gateway → ValueError honesto.
 """
@@ -151,6 +153,7 @@ async def test_consolidacion_happy_path(manager):
         entity_id=privado.entity_id,
         domain=DomainType.CONVERSATION,
         time_window="7d",
+        owner="david-gomez",
     )
 
     # Resumen pedido al gateway con el modelo de consolidación...
@@ -171,6 +174,11 @@ async def test_consolidacion_happy_path(manager):
     assert set(upsert_kwargs["payload"]["metadata"]["source_event_ids"]) == {
         str(privado.id), str(compartido.id)
     }
+    # [ADR-012-004] #115: el owner del consolidate es la entidad de su
+    # contexto (sin re-atribución v1) — slug legible en el punto, y el
+    # tenant_id preexistente intacto (D3 en ambas direcciones).
+    assert upsert_kwargs["payload"]["owner"] == "david-gomez"
+    assert upsert_kwargs["payload"]["tenant_id"] == str(privado.entity_id)
 
     # ...dos facturas en llm_audit, en el orden del flujo: la completion
     # del LLM primero (el resumen se genera) y el embedding del resumen

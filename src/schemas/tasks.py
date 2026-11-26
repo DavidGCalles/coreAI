@@ -100,11 +100,12 @@ class TaskDispatchResponse(BaseModel):
     actor: str = Field(
         ...,
         description=(
-            "Actor de trazabilidad estampado en el contexto de la tarea "
+            "Actor de trazabilidad estampado en la tarea "
             "(ADR-012-003): el declarado por el despachante o, por "
-            "omisión, el slug de la entidad resuelta. Viaja en el payload "
-            "JSONB (consumible por los handlers), en el log del worker y "
-            "en cada entrada de error_history."
+            "omisión, el slug de la entidad resuelta. Vive en la COLUMNA "
+            "de primer nivel de la fila (re-home del #115), visible en "
+            "el contexto de ejecución, en el log del worker y en cada "
+            "entrada de error_history."
         ),
     )
     status: str = "PENDING"
