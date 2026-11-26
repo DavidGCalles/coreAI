@@ -97,10 +97,12 @@ pytest
 
 | Tool | Estado | Descripción |
 |---|---|---|
-| `coreai_dispatch_task` | ✅ Operativa | Única apertura de escritura: inyecta una tarea asíncrona (contrato del tipo obligatorio — ADR-006) con auto-vivificación de sesión/entidad si no se aportan IDs. |
+| `coreai_dispatch_task` | ✅ Operativa | Única apertura de escritura: inyecta una tarea asíncrona (contrato del tipo obligatorio — ADR-006) Identidad en la frontera (ADR-012): `entity` opcional resuelta contra el registro del despliegue (declarada y no registrada = error determinista, la tarea no se crea); la respuesta devuelve siempre la `entity_id` resuelta y el `actor` opcional de trazabilidad; sin `entity`, `system_default` explícito. La sesión sigue auto-vivificándose si no se aporta ID. |
 | `coreai_get_task` | ✅ Operativa | Consulta read-only del estado de una tarea (`task_id` → status + `error_trace`): la lectura write-then-read de la doctrina ADR-005. Respuesta pelada — el payload crudo nunca viaja. |
-| `coreai_search_context` | ✅ Operativa | Lectura síncrona read-only (ADR-005-002): búsqueda semántica sobre TODAS las colecciones de texto, merge global por score y top_k tras el merge. Sin resultados sobre el umbral = no-match honesto. La consistencia con las ingestas es eventual. |
-| `coreai_search_image` | ✅ Operativa | Lectura síncrona read-only (identify, ADR-007): similitud visual contra la colección de imágenes con embed efímero de consulta — la imagen de consulta nunca se persiste. Misma superficie de filtros que el recall de texto (proyecto, top_k, umbral de visión). |
+| `coreai_search_context` | ✅ Operativa | Lectura síncrona read-only (ADR-005-002): búsqueda semántica sobre TODAS las colecciones de texto, merge global por score y top_k tras el merge. Filtros opcionales de proyecto y `owner` (titularidad, ADR-012-005). Sin resultados sobre el umbral = no-match honesto. La consistencia con las ingestas es eventual. |
+| `coreai_search_image` | ✅ Operativa | Lectura síncrona read-only (identify, ADR-007): similitud visual contra la colección de imágenes con embed efímero de consulta — la imagen de consulta nunca se persiste. Misma superficie de filtros que el recall de texto: proyecto, `owner` (simétrico, ADR-012-005), top_k y umbral de visión. |
+| `coreai_list_tasks` | ✅ Operativa | Listado read-only por estado (4.4, #105): la DLQ lógica del sistema es el estado FAILED — cada ítem con retry_count, error_history y su edad, en FIFO y con límite (default 50, techo 200). |
+| `coreai_retry_failed_task` | ✅ Operativa | Reinyección manual de una FAILED de la DLQ (4.4, #105): vuelve a PENDING con retry_count=0 y disponible ya; solo FAILED es reinyectable, error_history intacto. |
 
 ## Mapa del repositorio
 
