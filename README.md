@@ -12,7 +12,7 @@
 - **Memoria unificada** — PostgreSQL (UUIDs, entidades/eventos/relaciones) es la fuente de verdad; Qdrant contiene vectores derivados: nunca texto sin respaldo relacional.
 - **Ingesta unificada (ADR-005)** — una única apertura de escritura, `coreai_dispatch_task`: las escrituras son eventos que el córtex procesa en asíncrono; las lecturas síncronas acotadas (`coreai_search_context` + `coreai_search_image`, read-only) son la única otra apertura.
 - **Contratos de tarea (ADR-006)** — cada tipo de tarea despachable lleva contrato formal registrado: *sin contrato no hay despacho*.
-- **Memoria multimodal acotada (ADR-007)** — la ingesta de imagen va por la event lane como toda escritura (tarea `vectorize_image_event` con contrato ADR-006); sus vectores viven en una colección Qdrant propia (jina-clip-v2, 1024 dims) garantizada al arranque del worker.
+- **Memoria multimodal acotada (ADR-007)** — la ingesta de imagen va por la event lane como toda escritura (tarea `vectorize_image_event` con contrato ADR-006); sus vectores viven en una colección Qdrant propia (jina-clip-v2, 1024 dims) garantizada al arranque de worker y core-mcp (BUG-011, #107).
 - **Córtex asíncrono sin broker** — cola de tareas sobre PostgreSQL con `SELECT ... FOR UPDATE SKIP LOCKED`.
 
 ## Arquitectura
@@ -67,6 +67,8 @@ pytest
 > El esquema relacional (los 4 enums + las tablas) se autogestiona al arranque de `core-mcp` (BUG-010): tras un `docker compose down -v`, el primer `docker compose up` ya procesa un dispatch sin pasos manuales. `scripts/db/` sigue vetado (legacy desincronizado).
 >
 > **Regla de esquema aditivo (ADR-011):** los modelos ORM son la única fuente de verdad del esquema; no hay migraciones (Alembic queda fuera del repo) y el bootstrap garantiza al arranque las tablas, columnas y valores de enum que falten. El esquema evoluciona solo de forma aditiva: sin DROP, renombres ni cambios de tipo salvo ADR explícito con script one-shot documentado; toda columna nueva es nullable o lleva default.
+>
+> **Topología vectorial y titularidad al arranque (BUG-011 #107 + ADR-012-005):** la garantía no es solo relacional: worker y core-mcp garantizan al boot la topología vectorial (`ensure_collections` — las colecciones Qdrant se crean o validan, con el 409 de carrera entre procesos tratado como señal idempotente) y la titularidad de los históricos (`ensure_owners` — los puntos sin `owner` se sellan a `system_default` en el propio arranque, regla D1 del ADR-012).
 
 > **Entidades declarativas (ADR-012-001):** las identidades del inquilino viven en `data/entities/entities.yaml` (volumen de datos, fuera del repo; referencia en `src/config/entities.example.yaml`). El bootstrap garantiza al arranque las entidades del fichero más un `system_default` implícito, con `INSERT ... ON CONFLICT (slug) DO NOTHING`: idempotente y aditivo — la tabla jamás se recorta. Fichero ausente o vacío: arranque normal con solo `system_default`; malformado: error de arranque determinista (fichero y razón, sin backoff). Solo la ruta viaja por env (`ENTITIES_FILE`); el contenido de entidades jamás viaja por env.
 
@@ -147,7 +149,9 @@ scripts/         # prepare_model (+ prepare_clip_kit), schedulers/crontab
 
 ## Estado del proyecto
 
-En desarrollo activo. El **Epic 4: Córtex Asíncrono** (issue #26) está en main desde el 21 de octubre — el sustrato expone `coreai_dispatch_task` + `coreai_get_task` más el recall read-only síncrono (`coreai_search_context` + `coreai_search_image`, [ADR-005-002] #37, 26 oct: sweep por dominios, filtro por proyecto y embed efímero de consulta) — y el epic permanece abierto hasta que aterricen los pospuestos (4.3 #29, 4.4 #30). El **ADR-006 (contratos de tarea)** y el **ADR-007 (memoria multimodal)** están implementados y validados E2E (23 oct): tres contratos registrados y publicados como resources, y la tubería de imagen completa — dispatch → contrato → worker → gateway LiteLLM → colección `images` — viva en main.
+En desarrollo activo. El **Epic 4: Córtex Asíncrono** (issue #26) está en main desde el 21 de octubre — el sustrato expone `coreai_dispatch_task` + `coreai_get_task` más el recall read-only síncrono (`coreai_search_context` + `coreai_search_image`, [ADR-005-002] #37, 26 oct: sweep por dominios, filtro por proyecto y embed efímero de consulta) — El epic está cerrado (issues #26, #29 y #30 cerrados): la DLQ del 4.4 aterrizó con la #105 (`coreai_list_tasks` + `coreai_retry_failed_task`). El **ADR-006 (contratos de tarea)** y el **ADR-007 (memoria multimodal)** están implementados y validados E2E (23 oct): cuatro contratos registrados y publicados como resources (los tres originales más el amend de la ADR-009), y la tubería de imagen completa — dispatch → contrato → worker → gateway LiteLLM → colección `images` — viva en main.
+
+Desde noviembre la frontera siguió creciendo: **ADR-011** (esquema aditivo con bootstrap idempotente, 15 nov), **BUG-011** (#107, topología vectorial garantizada al arranque en worker y core-mcp) y la **familia ADR-012 completa** (26 nov, PRs #119–#123): entidades declarativas, resolución de identidad en la frontera, actor de trazabilidad, titularidad por registro y filtro por `owner` en el recall. Quedan abiertos el BUG-006 (#69, consolidación por temática) y la propuesta ADR-010 (#93, ingesta de documentos); el RBAC posterior sigue sin decidirse (ADR-012).
 
 ---
 
