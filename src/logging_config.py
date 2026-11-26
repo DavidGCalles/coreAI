@@ -18,6 +18,12 @@ instrumentación nueva. En Grafana/LogQL, la consulta
 `{compose_service="worker-node"} |= "task=<uuid>"` devuelve la traza
 completa del ciclo de vida de esa tarea (claim -> router -> handler ->
 manager -> COMPLETED/FAILED).
+
+Traza de actores (ADR-012-003, #114): mismo patrón, mismo filtro — el worker
+fija también el actor estampado en el contexto de la tarea (`actor=<slug o
+free-string>`) al reclamarla y lo suelta al cerrar su ciclo. En Loki/Grafana,
+`|= "actor=<valor>"` recorta la traza de una tarea a las líneas de QUIÉN
+despachó: la trazabilidad que la DLQ y su auditoría necesitan.
 """
 
 import contextvars
@@ -32,6 +38,14 @@ _task_id_context: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar
     "coreai_task_id", default=None
 )
 
+# Actor de la tarea en ejecución (ADR-012-003, #114): free-string de
+# trazabilidad estampado por el dispatch (o el slug de la entidad resuelta
+# por omisión). Misma vida que el task_id: lo fija el claim, lo suelta el
+# finally del ciclo.
+_actor_context: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "coreai_actor", default=None
+)
+
 
 def set_current_task_id(task_id: str) -> None:
     """Fija el UUID de la tarea en ejecución (lo llama el bucle del worker)."""
@@ -43,18 +57,36 @@ def clear_current_task_id() -> None:
     _task_id_context.set(None)
 
 
+def set_current_actor(actor: Optional[str]) -> None:
+    """
+    Fija el actor de la tarea en ejecución (ADR-012-003, #114). Lo llama el
+    bucle del worker tras el claim, leyendo el actor del propio payload de
+    la tarea: lo estampó el dispatch (TaskManager) o no existe (tareas
+    históricas anteriores a la familia) y el filtro renderiza el "-".
+    """
+    _actor_context.set(actor if isinstance(actor, str) else None)
+
+
+def clear_current_actor() -> None:
+    """Suelta el actor al cerrar el ciclo de la tarea (worker)."""
+    _actor_context.set(None)
+
+
 class TaskIdLogFilter(logging.Filter):
     """
-    Inyecta el UUID de la tarea en ejecución en cada registro de log.
+    Inyecta el UUID de la tarea en ejecución y su actor en cada registro
+    de log.
 
-    Añade el atributo `task_id` (UUID o "-") a cada record; el formato de
-    logging lo renderiza como `task=<valor>`. Cero cambios en las llamadas
-    de log del código de negocio: router, handlers y managers quedan
-    correlacionados por la tarea sin saberlo.
+    Añade los atributos `task_id` (UUID o "-") y `actor` (free-string o
+    "-") a cada record; el formato de logging los renderiza como
+    `task=<valor>` y `actor=<valor>`. Cero cambios en las llamadas de log
+    del código de negocio: router, handlers y managers quedan correlacionados
+    por la tarea sin saberlo.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
         record.task_id = _task_id_context.get() or "-"
+        record.actor = _actor_context.get() or "-"
         return True
 
 
@@ -70,8 +102,9 @@ def _resolve_level(level: str | int) -> int:
 
 _configured = False
 
-# El campo task=<uuid> es la traza Loki por UUID (Issue 4.3, ADR-003).
-DEFAULT_LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - task=%(task_id)s - %(message)s"
+# El campo task=<uuid> es la traza Loki por UUID (Issue 4.3, ADR-003); el
+# actor=<valor> es la trazabilidad del dispatch (ADR-012-003, #114).
+DEFAULT_LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - task=%(task_id)s - actor=%(actor)s - %(message)s"
 
 
 def configure_logging(
@@ -145,3 +178,4 @@ def configure_logging(
 def get_logger(name: str | None = None) -> logging.Logger:
     """Convenience wrapper for logging.getLogger."""
     return logging.getLogger(name or 'lifeos')
+

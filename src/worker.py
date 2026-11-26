@@ -6,7 +6,13 @@ from src.db.database import AsyncSessionLocal
 from src.db.bootstrap import ensure_relational_schema
 from src.db.entities_config import EntitiesProvisionError
 from src.repositories.relational import TaskRepository
-from src.logging_config import configure_logging, set_current_task_id, clear_current_task_id
+from src.logging_config import (
+    configure_logging,
+    set_current_task_id,
+    clear_current_task_id,
+    set_current_actor,
+    clear_current_actor,
+)
 from src.managers.config_manager import config_manager
 from src.workers.task_router import route_task
 from src.workers.failure_classification import es_fallo_determinista
@@ -70,7 +76,7 @@ async def garantia_arranque() -> None:
 
     Orden: esquema primero — el claim es lo primero que toca el bucle.
 
-    Sin engine.dispose() tras el ensure_relacional_schema: ese cierre
+    Sin engine.dispose() tras el ensure_relational_schema: ese cierre
     existe en core-mcp porque SU bootstrap corre en un event loop efímero
     que se cierra antes de servir; el worker vive entero en UN solo loop
     (asyncio.run(worker_loop())), así que las conexiones de pool creadas
@@ -157,6 +163,13 @@ async def worker_loop():
                     # Con el id capturado, el fallo de ejecución SIEMPRE aterriza
                     # en fail_task (que ya trabaja por UUID, sin tocar el ORM).
                     task_id = task.id
+                    # El actor también se captura ANTES (misma máscara greenlet):
+                    # vive estampado en el JSONB desde el dispatch (ADR-012-003,
+                    # #114) — el declarado o el slug de la entidad resuelta. Las
+                    # tareas históricas anteriores a la familia no lo llevan: el
+                    # filtro renderiza el placeholder "-".
+                    payload_actual = task.payload if isinstance(task.payload, dict) else {}
+                    actor_actual = payload_actual.get("actor")
                     
                     try:
                         # Traza Loki por UUID (Issue 4.3, ADR-003): el contexto de
@@ -165,6 +178,10 @@ async def worker_loop():
                         # lo renderiza como task=<uuid>; en Loki/Grafana se busca
                         # el UUID y aparece la traza completa del ciclo de vida.
                         set_current_task_id(task_id)
+                        # Traza de actor (ADR-012-003, #114): mismo filtro, mismo
+                        # ciclo — cada línea lleva también actor=<valor>, la
+                        # trazabilidad de QUIÉN despachó de la DLQ a Grafana.
+                        set_current_actor(actor_actual)
                         
                         # Fase 2: Trabajo en memoria delegando al Enrutador (Registry)
                         await route_task(task, session)
@@ -182,9 +199,10 @@ async def worker_loop():
                         logger.error("Fallo ejecutando tarea %s: %s", task_id, execution_error)
                         await _resolver_fallo(repo, task_id, execution_error)
                     finally:
-                        # El ciclo de la tarea termina (bien o mal): suelta el
-                        # UUID del contexto para no filtrarlo a la siguiente.
+                        # El ciclo de la tarea termina (bien o mal): suelta las
+                        # claves de contexto para no filtrarlas a la siguiente.
                         clear_current_task_id()
+                        clear_current_actor()
                 else:
                     # Cola vacía: relajamos el polling progresivamente
                     await asyncio.sleep(backoff)

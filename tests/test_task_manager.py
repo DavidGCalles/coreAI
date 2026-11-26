@@ -51,10 +51,14 @@ async def test_task_manager_vivifica_sesion_ligada_a_la_entidad_resuelta(db_sess
         task_payload={"raw_text": "Cargando volcado mental."}
     )
 
-    response = await _manager(db_session).dispatch_task(request, entity_id=resolved.id)
+    response = await _manager(db_session).dispatch_task(
+        request, entity_id=resolved.id, actor="despachante-de-test"
+    )
 
     # Contrato de salida: la entity_id resuelta viaja SIEMPRE (nunca silenciosa)
     assert response.entity_id == resolved.id
+    # [ADR-012-003] #114: el actor estampado también viaja SIEMPRE
+    assert response.actor == "despachante-de-test"
 
     result = await db_session.execute(select(Task).where(Task.id == response.task_id))
     task_in_db = result.scalar_one_or_none()
@@ -64,6 +68,8 @@ async def test_task_manager_vivifica_sesion_ligada_a_la_entidad_resuelta(db_sess
     assert task_in_db.entity_id == resolved.id, "La tarea no nació titulada al despachante."
     assert task_in_db.status.value == "PENDING", "El estado inicial no es el correcto."
     assert task_in_db.payload["task_type"] == "extract_entities", "El type no se inyectó en el JSONB."
+    # El actor vive en el CONTEXTO de la tarea (JSONB), junto al task_type
+    assert task_in_db.payload["actor"] == "despachante-de-test"
 
     session_in_db = (await db_session.execute(
         select(Session).where(Session.id == response.session_id)
@@ -95,9 +101,12 @@ async def test_task_manager_sesion_explicita_no_duplica_y_titula_al_despachante(
         session_id=sesion_previa.id
     )
 
-    response = await _manager(db_session).dispatch_task(request, entity_id=despachante.id)
+    response = await _manager(db_session).dispatch_task(
+        request, entity_id=despachante.id, actor="coreai-cron"
+    )
 
     assert response.session_id == sesion_previa.id, "El manager ignoró el session_id explícito."
+    assert response.actor == "coreai-cron"
     sesiones_despues = (await db_session.execute(select(func.count(Session.id)))).scalar_one()
     assert sesiones_despues == sesiones_antes, "El manager duplicó la sesión."
 
@@ -105,3 +114,35 @@ async def test_task_manager_sesion_explicita_no_duplica_y_titula_al_despachante(
         select(Task).where(Task.id == response.task_id)
     )).scalar_one()
     assert task_in_db.entity_id == despachante.id, "La task no quedó titulada al despachante."
+    assert task_in_db.payload["actor"] == "coreai-cron"
+
+@pytest.mark.asyncio
+async def test_task_manager_estampa_el_actor_por_omision_resuelto_por_la_frontera(db_session):
+    """
+    [ADR-012-003] #114: el manager NO resuelve el default — estampa lo que
+    la frontera le pasa. Sin actor declarado, la frontera pasa el SLUG de la
+    entidad resuelta (decisión de David, 25 nov: legible en Grafana y
+    coherente con el namespace free-string; el DoD del issue decía
+    'entity_id' y quedó des-actualizado al respecto, documentado en la PR).
+    El manager solo verifica que ese acuerdo viaja íntegro.
+    """
+    resolved = await _nueva_entidad(db_session)
+
+    request = TaskDispatchRequest(
+        task_type="extract_entities",
+        task_payload={"raw_text": "Despacho sin actor explícito."}
+    )
+
+    # Lo que la frontera pasaría: default = slug de la entidad resuelta
+    response = await _manager(db_session).dispatch_task(
+        request, entity_id=resolved.id, actor="system_default"
+    )
+
+    assert response.actor == "system_default"
+    task_in_db = (await db_session.execute(
+        select(Task).where(Task.id == response.task_id)
+    )).scalar_one()
+    assert task_in_db.payload["actor"] == "system_default"
+    # El actor jamás muta el payload del contrato: solo la clave de contexto
+    assert task_in_db.payload["task_type"] == "extract_entities"
+    assert task_in_db.payload["raw_text"] == "Despacho sin actor explícito."

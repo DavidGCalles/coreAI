@@ -194,12 +194,18 @@ class TaskRepository(BaseRepository[Task]):
         # Historial append-only (4.4-002 #104): cada intento fallido deja su
         # entrada con intento, instante y traza — la auditoría de la DLQ
         # lógica y su lectura MCP (4.4-003) se apoyan aquí.
+        # [ADR-012-003] #114: la entrada se enriquece con el actor — el mismo
+        # free-string que el dispatch estampó en el propio JSONB, leído aquí
+        # para que cada intento de la DLQ diga QUIÉN lo despachó (apto Grafana).
+        # Tareas históricas anteriores a la familia: sin actor → None, la
+        # auditoría no se reescribe, solo se enriquece hacia adelante.
         payload_copy = dict(current_payload) if isinstance(current_payload, dict) else {}
         history = list(payload_copy.get("error_history", []))
         history.append({
             "attempt": retry_count + 1,
             "at": datetime.now(timezone.utc).isoformat(),
             "trace": error_msg,
+            "actor": payload_copy.get("actor"),
         })
         payload_copy["error_history"] = history
         payload_copy["error_trace"] = error_msg

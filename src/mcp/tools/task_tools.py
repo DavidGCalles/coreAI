@@ -41,7 +41,13 @@ DISPATCH_TOOL_DESCRIPTION = (
     "explícito si no declaras ninguna). Un slug declarado y no registrado "
     "rebota aquí mismo con el catálogo de entidades válidas: mismo fallo "
     "determinista que el contrato, la tarea no se crea y reintentar no "
-    "sirve. Catálogo de contratos: "
+    "sirve. Trazabilidad (ADR-012-003): el argumento opcional 'actor' es "
+    "un free-string de quién despacha dentro del namespace de la entidad "
+    "— sin censo ni validación semántica (autenticar humanos es del edge, "
+    "JAMÁS del core); la respuesta, el contexto de la tarea y cada entrada "
+    "de error_history llevan el actor estampado (por omisión, el slug de "
+    "la entidad resuelta). El actor JAMÁS genera veneno: el único veneno "
+    "de identidad es el de entidad no registrada. Catálogo de contratos: "
     + CONTRACT_URI_TEMPLATE
 )
 
@@ -310,17 +316,30 @@ async def handle_task_tool(name: str, arguments: dict) -> dict:
                         "isError": True
                     }
 
+                # 2.2 Frontera de actor (ADR-012-003, #114): free-string de
+                #     trazabilidad, resuelto aquí mismo. La forma (techo de
+                #     longitud, MAX_ACTOR_LENGTH) ya la validó Pydantic al
+                #     parsear el sobre; vacío o solo espacios se normalizan a
+                #     ausente — el actor JAMÁS genera veneno (D4 es de la
+                #     ENTIDAD, no del actor: autenticar humanos es del edge).
+                #     Default por omisión: el slug de la entidad resuelta
+                #     ('declarada' ES el slug contra el que la frontera acaba
+                #     de resolver, también en el caso ausente).
+                actor_explicito = (request_data.actor or "").strip()
+                actor = actor_explicito if actor_explicito else declarada
+
                 task_repo = TaskRepository(session)
                 session_repo = SessionRepository(session)
 
                 manager = TaskManager(session, task_repo, session_repo)
                 response = await manager.dispatch_task(
-                    request_data, entity_id=resolved_entity.id
+                    request_data, entity_id=resolved_entity.id, actor=actor
                 )
 
                 # Contrato de salida serializado: el cliente lee el session_id
-                # autogenerado y la entity_id RESUELTA (ADR-012-002) — la
-                # resolución nunca es silenciosa.
+                # autogenerado, la entity_id RESUELTA (ADR-012-002) y el actor
+                # estampado (ADR-012-003) — ni la resolución ni el estampado
+                # son silenciosos.
                 return {
                     "content": [{"type": "text", "text": response.model_dump_json(indent=2)}],
                     "isError": False
@@ -443,3 +462,4 @@ async def handle_task_tool(name: str, arguments: dict) -> dict:
             return {"content": [{"type": "text", "text": f"Fallo estructural: {str(e)}"}], "isError": True}
 
     raise ValueError(f"Herramienta {name} no es gestionada por task_tools.")
+
