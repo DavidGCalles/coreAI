@@ -20,6 +20,7 @@ class MemoryHit(BaseModel):
     content: str | None = Field(None, description="Contenido textual del punto si lo lleva: el propio evento en los puntos de texto; la descripción registrada en los de imagen. Ausente si el registro no la trajo.")
     session_id: str | None = Field(None, description="Sesión del evento de imagen (correlación texto↔imagen).")
     project: str | None = Field(None, description="Proyecto del registro, si lo trae el punto.")
+    owner: str | None = Field(None, description="Titular del registro (slug de la entidad), si el punto lo lleva estampado.")
 
 
 class RecallTextRequest(BaseModel):
@@ -28,6 +29,7 @@ class RecallTextRequest(BaseModel):
 
     query: str = Field(..., min_length=1, description="Consulta en lenguaje natural.")
     project: str | None = Field(None, min_length=1, description="Solo puntos registrados bajo este proyecto. Opcional.")
+    owner: str | None = Field(None, min_length=1, description="Solo puntos cuya titularidad sea este slug de entidad. Opcional: sin él, la búsqueda ve toda la memoria (comportamiento de siempre).")
     top_k: int = Field(5, ge=1, le=50, description="Máximo número de resultados tras el merge global.")
     score_threshold: float = Field(0.7, ge=0.0, le=1.0, description="Similitud mínima para devolver un resultado; por debajo: no-match honesto.")
 
@@ -46,6 +48,7 @@ class RecallImageRequest(BaseModel):
         ),
     )
     project: str | None = Field(None, min_length=1, description="Solo puntos registrados bajo este proyecto. Opcional.")
+    owner: str | None = Field(None, min_length=1, description="Solo puntos cuya titularidad sea este slug de entidad. Opcional: sin él, la búsqueda ve toda la memoria (comportamiento de siempre).")
     top_k: int = Field(5, ge=1, le=50, description="Máximo número de resultados.")
     score_threshold: float = Field(
         0.5,

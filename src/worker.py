@@ -16,7 +16,7 @@ from src.logging_config import (
 from src.managers.config_manager import config_manager
 from src.workers.task_router import route_task
 from src.workers.failure_classification import es_fallo_determinista
-from src.db.vector_db import ensure_collections
+from src.db.vector_db import ensure_collections, ensure_owners
 
 configure_logging(level=config_manager.get_app_config()["log_level"])
 logger = logging.getLogger("coreai-worker")
@@ -95,7 +95,7 @@ async def garantia_arranque() -> None:
             logger.info("Esquema relacional garantizado al arranque (BUG-011 #107)")
             break
         except EntitiesProvisionError as entities_error:
-            # [ADR-012-001] #112: provisión malformada = fallo DETERMINISTA de
+            # [ADR-012-001] #112: provisión malformado = fallo DETERMINISTA de
             # configuración — reintentar es reintentar el mismo fichero. Sin
             # backoff: el arranque muere aquí, explícito y con fichero y razón.
             logger.error(
@@ -115,13 +115,17 @@ async def garantia_arranque() -> None:
     # Colecciones con backoff (ADR-007-002 #50, BUG-001 #34). Qdrant puede
     # estar todavía levantándose (el worker no declara depends_on sobre
     # él). Pero NO se consume la cola hasta que la topología completa esté
-    # garantizada y validada.
+    # garantizada y validada. Junto a la topología corre el backfill de
+    # titularidad (D1 del ADR-012, [ADR-012-005] #116): los puntos
+    # históricos sin owner quedan sellados a `system_default` antes de
+    # consumir — nadie pierde acceso al subir la familia.
     # =================================================================
     boot_backoff = INITIAL_BACKOFF
     while True:
         try:
             await ensure_collections()
-            logger.info("Colecciones Qdrant garantizadas al arranque")
+            await ensure_owners()
+            logger.info("Colecciones Qdrant garantizadas al arranque (con backfill de titularidad)")
             break
         except Exception as init_error:
             logger.error(

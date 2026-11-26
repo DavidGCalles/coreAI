@@ -41,6 +41,7 @@ class MemorySearchFilters(BaseModel):
     query: str = Field("", description="Texto de consulta — lo embebe el llamador; el repositorio solo filtra.")
     domain: DomainType | None = Field(None, description="Filtrar por un dominio específico.")
     project: str | None = Field(None, description="Filtro exacto por proyecto (FR-3): clave plana 'project' del payload, simétrica en texto e imagen.")
+    owner: str | None = Field(None, description="Filtro exacto por titularidad (ADR-012-005): clave plana 'owner' del payload, el slug de la entidad titular estampado a la escritura (ADR-012-004). None = sin filtro de titularidad: todo lo visible hoy (retrocompatible).")
     tags_any: list[str] | None = Field(None, description="OR: contiene alguna de estas etiquetas.")
     tags_all: list[str] | None = Field(None, description="AND: contiene todas estas etiquetas.")
     properties_match: dict[str, Any] | None = Field(None, description="Filtro exacto por propiedades clave-valor.")

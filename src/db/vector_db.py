@@ -2,13 +2,16 @@
 import logging
 
 from qdrant_client import AsyncQdrantClient
+from qdrant_client.http import models
 
+from src.db.entities_config import SYSTEM_DEFAULT_SLUG
 from src.managers.config_manager import config_manager
 from src.repositories.vector import (
     VectorRepository,
     IMAGE_COLLECTION,
     IMAGE_VECTOR_SIZE,
     IMAGE_VECTOR_DISTANCE,
+    REGISTERED_COLLECTIONS,
     TEXT_VECTOR_SIZE,
     TEXT_VECTOR_DISTANCE,
 )
@@ -95,3 +98,55 @@ async def ensure_collections() -> None:
         vector_size=IMAGE_VECTOR_SIZE,
         distance=IMAGE_VECTOR_DISTANCE,
     )
+
+
+async def ensure_owners() -> None:
+    """
+    Backfill idempotente de titularidad (D1 del ADR-012, ejecutado en el
+    [ADR-012-005] #116): set_payload dirigido por filtro sobre TODAS las
+    colecciones registradas — toca SOLO los puntos cuya clave plana 'owner'
+    está vacía o ausente y les estampa el slug `system_default`.
+
+    Regla de cierre de históricos (decisión de David, 25 nov): nadie pierde
+    acceso al subir la familia. Los puntos pre-familia no llevaban owner (el
+    #115 empezó a estamparlo a la escritura); sin este cierre quedarían para
+    siempre fuera del filtro de titularidad y un recall con owner jamás los
+    vería — el histórico queda a nombre del inquilino por defecto del
+    sustrato, la misma identidad que la frontera resuelve para un despacho
+    omiso ([ADR-012-002] #113).
+
+    Idempotente por construcción (gemelo ensure_* del ADR-011 aplicado al
+    payload vectorial): el selector (is_empty O is_null sobre 'owner')
+    excluye a todo punto con titularidad ya estampada — N arranques
+    convergen al mismo estado y JAMÁS se sobrescribe un owner existente.
+    La garantía vive en el arranque, junto a ensure_collections: cada
+    proceso garantiza el sustrato que va a tocar (BUG-011 #107), y la
+    regla queda auditable en git.
+
+    La raza de arranque paralelo (worker y core-mcp a la vez) es benigna:
+    ambos estampan el MISMO slug con el mismo selector — el set converge.
+    """
+    client = await get_qdrant_client()
+    selector = models.FilterSelector(
+        filter=models.Filter(
+            should=[
+                models.IsEmptyCondition(is_empty=models.PayloadField(key="owner")),
+                models.IsNullCondition(is_null=models.PayloadField(key="owner")),
+            ],
+        )
+    )
+    for collection in REGISTERED_COLLECTIONS:
+        try:
+            await client.set_payload(
+                collection_name=collection,
+                payload={"owner": SYSTEM_DEFAULT_SLUG},
+                points=selector,
+                wait=True,
+            )
+            logger.info("Backfill de titularidad garantizado: '%s'", collection)
+        except Exception as e:
+            logger.error(
+                "Fallo estructural en el backfill de titularidad de '%s': %s",
+                collection, e,
+            )
+            raise

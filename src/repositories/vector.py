@@ -175,6 +175,20 @@ class VectorRepository:
                 )
             )
 
+        # Titularidad (ADR-012-005, #116): filtro OPCIONAL por owner, la
+        # visibilidad por registro decidida en el ADR-012. Es el hueco que
+        # la PR #70 dejó marcado en su diferimiento, restaurado aquí como
+        # clave plana del payload (el slug estampado a la escritura por el
+        # ADR-012-004), simétrico en texto e imagen. Sin filtro (None) =
+        # comportamiento actual: nadie pierde acceso por subir la familia.
+        if filters.owner is not None:
+            must_conditions.append(
+                models.FieldCondition(
+                    key="owner",
+                    match=models.MatchValue(value=filters.owner)
+                )
+            )
+
         if filters.tags_all:
             for tag in filters.tags_all:
                 must_conditions.append(
