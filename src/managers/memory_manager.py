@@ -119,13 +119,20 @@ class HybridMemoryManager:
         content: str,
         visibility: Visibility,
         metadata: dict[str, Any],
-        project: str | None = None
+        project: str | None = None,
+        owner: str | None = None
     ) -> Event:
         """
         Inyección dual SIN commit: evento relacional (flush), embedding
         (con su auditoría) y upsert en Qdrant. El commit pertenece al
         método llamador, dueño de la transacción — así la consolidación
         puede inyectar el resumen Y marcar los orígenes en UNA sola.
+
+        [ADR-012-004] #115: el `owner` es el slug de la entidad titular,
+        resuelto a la escritura por el llamador (join contra entities).
+        El lado relacional del texto ya es Event.entity_id (FK): solo el
+        punto Qdrant necesitaba la forma legible. JAMÁS llega por el
+        payload del contrato (extra=forbid lo rebota en la frontera).
         """
         # 1. Inserción Relacional (Flush para generar UUID, SIN commit)
         new_event = await self.relational_repo.create(
@@ -145,7 +152,12 @@ class HybridMemoryManager:
             "tenant_id": str(entity_id),
             "content": content,
             "metadata": metadata,
-            "project": project
+            "project": project,
+            # Owner legible ([ADR-012-004] #115): slug de la entidad
+            # titular resuelto a la escritura. tenant_id preexistente NO
+            # se toca (multitenancy diferida, D3 en ambas direcciones):
+            # tenant_id es aislamiento de cómputo, owner es titularidad.
+            "owner": owner
         }
 
         await self.vector_repo.upsert(
@@ -157,16 +169,17 @@ class HybridMemoryManager:
         return new_event
 
     async def add_memory(
-        self, 
-        entity_id: uuid.UUID, 
-        domain: DomainType, 
-        content: str, 
+        self,
+        entity_id: uuid.UUID,
+        domain: DomainType,
+        content: str,
         visibility: Visibility = Visibility.PRIVATE,
         metadata: dict[str, Any] = None,
-        project: str | None = None
+        project: str | None = None,
+        owner: str | None = None
     ) -> uuid.UUID:
         metadata = metadata or {}
-        
+
         try:
             new_event = await self._inject_memory(
                 entity_id=entity_id,
@@ -174,7 +187,8 @@ class HybridMemoryManager:
                 content=content,
                 visibility=visibility,
                 metadata=metadata,
-                project=project
+                project=project,
+                owner=owner
             )
             
             # 4. Consistencia: Asentamos la transacción y la auditoría
@@ -248,7 +262,8 @@ class HybridMemoryManager:
         self,
         entity_id: uuid.UUID,
         domain: DomainType,
-        time_window: str
+        time_window: str,
+        owner: str | None = None
     ) -> uuid.UUID | None:
         """
         Consolida la memoria episódica antigua de un inquilino+dominio (Issue 4.3, #29).
@@ -305,7 +320,12 @@ class HybridMemoryManager:
                 domain=domain,
                 content=resumen,
                 visibility=_visibilidad_mas_restrictiva(candidatos),
-                metadata=metadata
+                metadata=metadata,
+                # Owner del consolidate = la entidad de su contexto
+                # ([ADR-012-004] #115): el resumen queda a nombre de su
+                # inquilino, sin re-atribución v1 — la titularidad no se
+                # reinterpreta en la consolidación.
+                owner=owner
             )
 
             # 3. Los orígenes quedan marcados: nunca vuelven a una ventana

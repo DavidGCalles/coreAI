@@ -9,6 +9,9 @@ Valida:
 - Delegación exitosa a HybridMemoryManager.add_memory() mediante kwargs.
 - Propagación de 'project' (FR-3, #51): del payload del contrato al payload
   de Qdrant vía add_memory — y su default honesto (None) cuando falta.
+- Titularidad por registro en la escritura ([ADR-012-004] #115): el owner del
+  punto es el SLUG de la entidad titular (despachante desde el #113, sesión
+  como fallback de legado), resuelto con join contra entities.
 """
 
 import pytest
@@ -59,6 +62,28 @@ def pending_vectorize_task_sin_project():
 
 
 @pytest.fixture
+def pending_vectorize_task_titular():
+    """
+    Task post-familia ([ADR-012-002] #113): nace TITULADA al despachante,
+    una entidad distinta de la dueña de la sesión — la titularidad es del
+    despacho, no de la sesión.
+    """
+    return Task(
+        id=uuid.UUID('f47ac10b-58cc-4372-a567-0e02b2c3d479'),
+        entity_id=uuid.UUID('cccccccc-cccc-cccc-cccc-cccccccccccc'),
+        session_id=uuid.UUID('11111111-1111-1111-1111-111111111111'),
+        status=TaskStatus.PENDING,
+        payload={
+            "task_type": TaskType.VECTORIZE_EVENT.value,
+            "content": "Memoria titulada al despachante.",
+            "domain": "SYSTEM",
+            "visibility": "PRIVATE",
+            "project": "elios-workshop"
+        }
+    )
+
+
+@pytest.fixture
 def missing_content_task():
     """Crea una tarea cuyo payload no trae 'content': solo corrupción de cola."""
     return Task(
@@ -78,6 +103,7 @@ def missing_content_task():
 # =====================================================================
 
 @pytest.mark.asyncio
+@patch("src.workers.task_router.EntityRepository")
 @patch("src.workers.task_router.get_qdrant_client", new_callable=AsyncMock)
 @patch("src.workers.task_router.LLMClient")
 @patch("src.workers.task_router.HybridMemoryManager")
@@ -85,6 +111,7 @@ async def test_handle_vectorize_event_happy_path(
     mock_manager_class, 
     mock_llm_client_class, 
     mock_get_qdrant, 
+    mock_entity_repo_class,
     pending_vectorize_task
 ):
     """
@@ -105,23 +132,129 @@ async def test_handle_vectorize_event_happy_path(
 
     mock_manager_instance = AsyncMock()
     mock_manager_class.return_value = mock_manager_instance
+
+    # [ADR-012-004] #115: el join contra entities devuelve el slug legible
+    mock_entity_repo_class.return_value.get_slug = AsyncMock(
+        return_value="lane-de-test"
+    )
     
     # 2. Ejecución
     await handle_vectorize_event(pending_vectorize_task, session_mock)
     
     # 3. Validaciones
     mock_get_qdrant.assert_awaited_once()
-    
+
+    # Fallback de legado: la task PRE-familia no trae columna estampada →
+    # titularidad por sesión; el slug se resuelve del titular así resuelto
+    mock_entity_repo_class.return_value.get_slug.assert_awaited_once_with(
+        uuid.UUID('99999999-9999-9999-9999-999999999999')
+    )
     mock_manager_instance.add_memory.assert_awaited_once_with(
         entity_id=uuid.UUID('99999999-9999-9999-9999-999999999999'),
         domain=DomainType.SYSTEM,
         content="Memoria determinista y resiliente.",
         visibility=Visibility.PRIVATE,
-        project="elios-workshop"
+        project="elios-workshop",
+        owner="lane-de-test"
     )
 
 
 @pytest.mark.asyncio
+@patch("src.workers.task_router.EntityRepository")
+@patch("src.workers.task_router.get_qdrant_client", new_callable=AsyncMock)
+@patch("src.workers.task_router.LLMClient")
+@patch("src.workers.task_router.HybridMemoryManager")
+async def test_handle_vectorize_event_titularidad_por_despacho_no_por_sesion(
+    mock_manager_class,
+    mock_llm_client_class,
+    mock_get_qdrant,
+    mock_entity_repo_class,
+    pending_vectorize_task_titular
+):
+    """
+    [ADR-012-004] #115: con columna estampada (#113), la titularidad de la
+    escritura es el DESPACHANTE (task.entity_id), aunque la sesión viva a
+    nombre de otra entidad — la titularidad es del despacho, no de la
+    sesión. El slug se resuelve del titular, y a él se titula la memoria.
+    """
+    session_mock = AsyncMock()
+
+    # La sesión pertenece a OTRA entidad: no manda en la titularidad
+    mock_db_session = MagicMock()
+    mock_db_session.entity_id = uuid.UUID('99999999-9999-9999-9999-999999999999')
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_db_session
+    session_mock.execute.return_value = mock_result
+
+    mock_manager_instance = AsyncMock()
+    mock_manager_class.return_value = mock_manager_instance
+
+    mock_entity_repo_class.return_value.get_slug = AsyncMock(
+        return_value="frontier-david"
+    )
+
+    await handle_vectorize_event(pending_vectorize_task_titular, session_mock)
+
+    # El slug sale del DESPACHANTE, no del dueño de la sesión
+    mock_entity_repo_class.return_value.get_slug.assert_awaited_once_with(
+        uuid.UUID('cccccccc-cccc-cccc-cccc-cccccccccccc')
+    )
+    mock_manager_instance.add_memory.assert_awaited_once_with(
+        entity_id=uuid.UUID('cccccccc-cccc-cccc-cccc-cccccccccccc'),
+        domain=DomainType.SYSTEM,
+        content="Memoria titulada al despachante.",
+        visibility=Visibility.PRIVATE,
+        project="elios-workshop",
+        owner="frontier-david"
+    )
+
+
+@pytest.mark.asyncio
+@patch("src.workers.task_router.EntityRepository")
+@patch("src.workers.task_router.get_qdrant_client", new_callable=AsyncMock)
+@patch("src.workers.task_router.LLMClient")
+@patch("src.workers.task_router.HybridMemoryManager")
+async def test_handle_vectorize_event_entidad_legada_sin_slug_owner_none(
+    mock_manager_class,
+    mock_llm_client_class,
+    mock_get_qdrant,
+    mock_entity_repo_class,
+    pending_vectorize_task
+):
+    """
+    [ADR-012-004] #115: entidad histórica sin slug (pre-ADR-012-001): el
+    punto nace con owner=None — honesto, sin inventar trazabilidad — y el
+    backfill (#116) lo rellena. Nada revienta por ello.
+    """
+    session_mock = AsyncMock()
+
+    mock_db_session = MagicMock()
+    mock_db_session.entity_id = uuid.UUID('99999999-9999-9999-9999-999999999999')
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_db_session
+    session_mock.execute.return_value = mock_result
+
+    mock_manager_instance = AsyncMock()
+    mock_manager_class.return_value = mock_manager_instance
+
+    mock_entity_repo_class.return_value.get_slug = AsyncMock(return_value=None)
+
+    await handle_vectorize_event(pending_vectorize_task, session_mock)
+
+    mock_manager_instance.add_memory.assert_awaited_once_with(
+        entity_id=uuid.UUID('99999999-9999-9999-9999-999999999999'),
+        domain=DomainType.SYSTEM,
+        content="Memoria determinista y resiliente.",
+        visibility=Visibility.PRIVATE,
+        project="elios-workshop",
+        owner=None
+    )
+
+
+@pytest.mark.asyncio
+@patch("src.workers.task_router.EntityRepository")
 @patch("src.workers.task_router.get_qdrant_client", new_callable=AsyncMock)
 @patch("src.workers.task_router.LLMClient")
 @patch("src.workers.task_router.HybridMemoryManager")
@@ -129,6 +262,7 @@ async def test_handle_vectorize_event_project_default_none(
     mock_manager_class,
     mock_llm_client_class,
     mock_get_qdrant,
+    mock_entity_repo_class,
     pending_vectorize_task_sin_project
 ):
     """
@@ -149,6 +283,10 @@ async def test_handle_vectorize_event_project_default_none(
     mock_manager_instance = AsyncMock()
     mock_manager_class.return_value = mock_manager_instance
 
+    mock_entity_repo_class.return_value.get_slug = AsyncMock(
+        return_value="lane-de-test"
+    )
+
     await handle_vectorize_event(pending_vectorize_task_sin_project, session_mock)
 
     mock_manager_instance.add_memory.assert_awaited_once_with(
@@ -156,7 +294,8 @@ async def test_handle_vectorize_event_project_default_none(
         domain=DomainType.SYSTEM,
         content="Memoria determinista y resiliente.",
         visibility=Visibility.PRIVATE,
-        project=None
+        project=None,
+        owner="lane-de-test"
     )
 
 

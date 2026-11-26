@@ -66,6 +66,10 @@ async def test_hybrid_manager_happy_path_with_audit(db_session, base_entity, vec
     assert event_id is not None
     mock_llm_client.generate_embedding.assert_called_once()
     vector_repo_mock.upsert.assert_called_once()
+    # [ADR-012-004] #115: sin owner declarado, el punto nace con owner=None
+    # (default honesto); falsificar identidades no es opción aquí.
+    upsert_kwargs = vector_repo_mock.upsert.call_args.kwargs
+    assert upsert_kwargs["payload"]["owner"] is None
     
     # --- VERIFICACIÓN DE AUDITORÍA ---
     # Comprobamos que el gasto se ha registrado en la tabla llm_audit apuntando a nuestro usuario
@@ -77,6 +81,32 @@ async def test_hybrid_manager_happy_path_with_audit(db_session, base_entity, vec
     assert audits[0].model_used == "text-embedding-test"
     assert audits[0].total_tokens == 15
     assert audits[0].completion_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_add_memory_estampa_owner_legible_en_el_punto(
+    db_session, base_entity, vector_repo_mock, mock_llm_client
+):
+    """
+    [ADR-012-004] #115: el owner (slug del titular) viaja como clave plana
+    del punto Qdrant junto al tenant_id preexistente — tenant_id es
+    aislamiento de cómputo (multitenancy diferida, D3), owner es
+    titularidad legible. El lado relacional del texto ya es Event.entity_id.
+    """
+    event_repo = EventRepository(db_session)
+    audit_repo = LLMAuditRepository(db_session)
+    manager = HybridMemoryManager(db_session, event_repo, vector_repo_mock, audit_repo, mock_llm_client)
+
+    await manager.add_memory(
+        entity_id=base_entity.id,
+        domain=DomainType.SYSTEM,
+        content="Registro con titular legible.",
+        owner="david-gomez",
+    )
+
+    upsert_kwargs = vector_repo_mock.upsert.call_args.kwargs
+    assert upsert_kwargs["payload"]["owner"] == "david-gomez"
+    assert upsert_kwargs["payload"]["tenant_id"] == str(base_entity.id)
 
 
 @pytest.mark.asyncio

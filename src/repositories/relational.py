@@ -63,6 +63,26 @@ class EntityRepository(BaseRepository[Entity]):
     def __init__(self, session: AsyncSession):
         super().__init__(Entity, session)
 
+    async def get_slug(self, entity_id: UUID) -> str | None:
+        """
+        Slug de la entidad por UUID ([ADR-012-004] #115).
+
+        El join contra el registro (`entities`) que resuelve el owner
+        legible A LA ESCRITURA: la titularidad ya vive en primer nivel
+        relacional (tasks.entity_id, #113) y aquí solo se traduce al
+        namespace free-string del ADR-012 que viaja en el payload de
+        Qdrant. Mismo helper que reutilizará el backfill (#116).
+
+        None para entidades históricas sin slug (pre-ADR-012-001): el
+        punto nace con owner=None y lo rellena el backfill — el mismo
+        trato honesto que actor=None en error_history: la auditoría no
+        se inventa, se rellena cuando existe.
+        """
+        result = await self.session.execute(
+            select(Entity.slug).where(Entity.id == entity_id)
+        )
+        return result.scalar_one_or_none()
+
 class SessionRepository(BaseRepository[Session]):
     def __init__(self, session: AsyncSession):
         super().__init__(Session, session)

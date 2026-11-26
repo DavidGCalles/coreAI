@@ -20,7 +20,7 @@ from src.managers.memory_manager import HybridMemoryManager
 from src.db.models import DomainType, Visibility
 
 import uuid
-from src.repositories.relational import EventRepository, LLMAuditRepository, SessionRepository, TaskRepository
+from src.repositories.relational import EntityRepository, EventRepository, LLMAuditRepository, SessionRepository, TaskRepository
 from src.repositories.vector import IMAGE_COLLECTION, VectorRepository
 from src.managers.memory_manager import HybridMemoryManager
 from src.managers.llm_client import LLMClient
@@ -109,8 +109,14 @@ async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
             f"Inconsistencia relacional fatal: La tarea {task.id} apunta a una "
             f"sesión inexistente ({task.session_id})."
         )
-    
-    entity_id = db_session.entity_id
+
+    # Titularidad por registro ([ADR-012-004] #115): la escritura queda a
+    # nombre del DESPACHANTE (tasks.entity_id, estampada por la frontera
+    # en el #113), no de la sesión. Fallback de legado: una task pre-familia
+    # aún PENDING llegó sin columna estampada → titularidad por sesión,
+    # documentada (idéntico al actor=None de error_history: la historia no
+    # se reescribe a destiempo).
+    entity_id = task.entity_id or db_session.entity_id
 
     # =================================================================
     # FASE 2: Extracción Estricta (purga de la extracción tolerante, 4.3)
@@ -159,6 +165,13 @@ async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
             llm_client=llm_client
         )
 
+        # Owner legible a la escritura ([ADR-012-004] #115): slug de la
+        # entidad titular, join contra el registro (entities) — el mismo
+        # helper del backfill (#116). None honesto si la entidad es
+        # histórica sin slug (pre-ADR-012-001). El tenant_id preexistente
+        # del punto NO se toca: D3 en ambas direcciones.
+        owner = await EntityRepository(session).get_slug(entity_id)
+
         # =================================================================
         # FASE 4: Ejecución Transaccional
         # =================================================================
@@ -167,7 +180,8 @@ async def handle_vectorize_event(task: Task, session: AsyncSession) -> None:
             domain=DomainType(domain_str.lower()),
             content=content,
             visibility=Visibility(visibility_str.lower()),
-            project=project
+            project=project,
+            owner=owner
         )
 
         logger.info("  [Worker] Vectorización completada con éxito para task %s", task.id)
@@ -401,8 +415,11 @@ async def handle_consolidate_memory(task: Task, session: AsyncSession) -> None:
             f"Inconsistencia relacional fatal: La tarea {task.id} apunta a una "
             f"sesión inexistente ({task.session_id})."
         )
-    
-    entity_id = db_session.entity_id
+
+    # Titularidad por registro ([ADR-012-004] #115): el resumen queda a
+    # nombre del despachante (tasks.entity_id, #113); fallback de legado
+    # por sesión para las tasks pre-familia aún PENDING.
+    entity_id = task.entity_id or db_session.entity_id
 
     # =================================================================
     # FASE 3: Inyección de Dependencias
@@ -423,13 +440,19 @@ async def handle_consolidate_memory(task: Task, session: AsyncSession) -> None:
             llm_client=llm_client
         )
 
+        # Owner del consolidate = la entidad de su contexto, sin
+        # re-atribución v1 ([ADR-012-004] #115): slug del titular a la
+        # escritura, mismo join del backfill (#116).
+        owner = await EntityRepository(session).get_slug(entity_id)
+
         # =================================================================
         # FASE 4: Ejecución Transaccional (Orquestador Híbrido)
         # =================================================================
         await memory_manager.consolidate_memory(
             entity_id=entity_id,
             domain=DomainType(domain_str.lower()),
-            time_window=time_window_str
+            time_window=time_window_str,
+            owner=owner
         )
 
         logger.info("  [Worker] Consolidación de memoria completada con éxito para task %s", task.id)
