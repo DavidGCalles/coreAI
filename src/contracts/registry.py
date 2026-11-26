@@ -72,7 +72,13 @@ class VectorizeEventPayload(TaskPayloadContract):
     )
     visibility: Visibility = Field(
         default=Visibility.PRIVATE,
-        description="Nivel de acceso del nodo de memoria. Por defecto 'private'.",
+        description=(
+            "Flag de acceso del registro, lo declara quien registra. Por "
+            "defecto 'private'. Distinto de la titularidad (D3, ADR-012): "
+            "el owner del punto es el slug de la entidad del despacho, "
+            "resuelto a la escritura (ADR-012-004, #115) — la identidad "
+            "nunca viaja por el contrato."
+        ),
     )
 
 
@@ -183,7 +189,12 @@ class VectorizeImageEventPayload(TaskPayloadContract):
     )
     visibility: Visibility = Field(
         default=Visibility.PRIVATE,
-        description="Nivel de acceso del vector de imagen. Por defecto 'private'.",
+        description=(
+            "Flag de acceso del vector de imagen. Por defecto 'private'. "
+            "Distinto de la titularidad (D3, ADR-012): el owner llega del "
+            "despacho resuelto a la escritura (ADR-012-004, #115), jamás "
+            "por el contrato."
+        ),
     )
 
     @field_validator("image")
