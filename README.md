@@ -139,8 +139,9 @@ scripts/         # prepare_model (+ prepare_clip_kit), schedulers/crontab
 | [007](docs/adr/007-multimodal-memory.md) | Memoria Multimodal — adopción anticipada y acotada (identificación visual, demo ELIOS) (✅ implementado, 23 oct) |
 | [008](docs/adr/008-mcp-streamable-http.md) | Superficie MCP sobre Streamable HTTP — el mismo server sirve STDIO y streamable HTTP; service del compose en http (✅ implementado, 28 oct) |
 | [009](docs/adr/009-memory-correction-surface.md) | Superficie de Corrección de la Memoria — el ciclo de vida de lo ya almacenado es del substrato: corrección de metadata por evento, sin re-embedding (✅ implementado, 3 nov) |
+| 010 · [propuesta #93](https://github.com/DavidGCalles/coreAI/issues/93) | Ingesta de Documentos Completos y Recall Tipado — propuesta abierta, sin ADR aterrizado (addendum #110); el salto de numeración no es errata |
 | [011](docs/adr/011-esquema-aditivo-bootstrap-idempotente.md) | Esquema Aditivo con Bootstrap Idempotente — los modelos ORM son la única fuente de verdad del esquema; Alembic fuera del repo; evolución solo aditiva garantizada al arranque (✅ implementado, 15 nov) |
-| [012](docs/adr/012-identidad-y-visibilidad-en-la-frontera.md) | Identidad y Visibilidad en la Frontera — entidades declarativas gobernadas en el despliegue, resolución en la frontera con fallo determinista, actor en contexto y titularidad por registro; sin cerrar el RBAC posterior (familia #112–#116 en curso) |
+| [012](docs/adr/012-identidad-y-visibilidad-en-la-frontera.md) | Identidad y Visibilidad en la Frontera — entidades declarativas gobernadas en el despliegue, resolución en la frontera con fallo determinista, actor en contexto y titularidad por registro; sin cerrar el RBAC posterior (✅ implementado, 26 nov: familia 001–005, PRs #119–#123, issues #112–#116 cerrados, E2E 5/5 en la VM) |
 
 ## Estado del proyecto
 
