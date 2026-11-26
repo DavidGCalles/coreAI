@@ -385,9 +385,11 @@ class HybridMemoryManager:
     # efímero que nunca se persiste.
 
     # La resolución de identidad multi-tenant queda DIFERIDA a su propia
-    # pieza de diseño: el recall v1 no filtra por tenant. Los puntos
-    # conservan tenant_id en su payload (la ingesta lo escribe), así
-    # que restaurar el aislamiento es un cambio local en el filtro.
+    # pieza de diseño: el recall sigue sin filtrar por tenant y los puntos
+    # conservan tenant_id en su payload (la ingesta lo escribe), así que
+    # restaurar el aislamiento es un cambio local en el filtro. La
+    # visibilidad por registro del ADR-012 (ADR-012-005, #116) es el
+    # filtro OPCIONAL de titularidad: owner=None = todo lo visible hoy.
 
     async def _embed_query_texto(self, query: str) -> list[float]:
         """
@@ -435,6 +437,9 @@ class HybridMemoryManager:
 
         Claves planas del payload, sin jerarquías: lo que ve el cliente es
         lo que hay en el punto (higiene de superficies, decisión 26 oct).
+        El owner viaja en el hit (ADR-012-005): la titularidad es visible,
+        nunca silenciosa — mismo contrato de salida que el entity_id del
+        dispatch en el #113.
         """
         payload = point.payload or {}
         return MemoryHit(
@@ -444,12 +449,14 @@ class HybridMemoryManager:
             content=payload.get("content"),
             session_id=payload.get("session_id"),
             project=payload.get("project"),
+            owner=payload.get("owner"),
         )
 
     async def recall_text(
         self,
         query: str,
         project: str | None = None,
+        owner: str | None = None,
         top_k: int = 5,
         score_threshold: float = 0.7
     ) -> list[MemoryHit]:
@@ -460,6 +467,11 @@ class HybridMemoryManager:
         fusiona los resultados en un solo ranking por score y recorta a
         top_k DESPUÉS del merge (decisión 26 oct): el ranking pertenece a la
         consulta, no a la colección. Cada hit lleva su colección de origen.
+
+        Filtro opcional de titularidad (ADR-012-005, #116): owner='A' = solo
+        puntos con owner=A; owner=None = comportamiento actual, todo lo
+        visible hoy (retrocompatible: nadie pierde acceso al subir la
+        familia).
 
         Colección inexistente = MissingCollectionError ANTES de embeber:
         un fallo de inicialización no se disfraza de no-match honesto.
@@ -480,6 +492,7 @@ class HybridMemoryManager:
         for domain in DomainType:
             filters = MemorySearchFilters(
                 project=project,
+                owner=owner,
                 limit=top_k,
                 score_threshold=score_threshold
             )
@@ -500,6 +513,7 @@ class HybridMemoryManager:
         self,
         image_data_uri: str,
         project: str | None = None,
+        owner: str | None = None,
         top_k: int = 5,
         score_threshold: float = 0.5
     ) -> list[MemoryHit]:
@@ -510,6 +524,10 @@ class HybridMemoryManager:
         hit plano) sobre el espacio de visión (jina-clip-v2, 1024 dims).
         La imagen de consulta NO se persiste: embed efímero. Sin matches
         sobre el umbral = no-match honesto (lista vacía).
+
+        Filtro opcional de titularidad (ADR-012-005, #116), simétrico con
+        el recall de texto: owner='A' = solo puntos con owner=A;
+        owner=None = comportamiento actual.
         """
         existentes = await self.vector_repo.collection_names()
         if IMAGE_COLLECTION not in existentes:
@@ -524,6 +542,7 @@ class HybridMemoryManager:
 
         filters = MemorySearchFilters(
             project=project,
+            owner=owner,
             limit=top_k,
             score_threshold=score_threshold
         )
