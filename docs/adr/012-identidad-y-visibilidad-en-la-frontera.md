@@ -1,7 +1,7 @@
 # ADR-012: Identidad y visibilidad en la frontera — el sustrato sabe quién despacha
 
 ## Status
-Proposed (25 nov 2026). Familia arrancada el 25 nov 2026: [ADR-012-001] #112, [ADR-012-002] #113, [ADR-012-003] #114, [ADR-012-004] #115 y [ADR-012-005] #116 como sub-issues nativos de esta issue; el doc aterriza al repo con el arranque, en PR propia (regla de la casa: el doc del ADR aterriza con el arranque de la familia, no al final). Refinado D1–D4 con David el 25 nov: sección «Refinado», abajo.
+Proposed (25 nov 2026). Familia arrancada el 25 nov 2026: [ADR-012-001] #112, [ADR-012-002] #113, [ADR-012-003] #114, [ADR-012-004] #115 y [ADR-012-005] #116 como sub-issues nativos de esta issue; el doc aterriza al repo con el arranque, en PR propia (regla de la casa: el doc del ADR aterriza con el arranque de la familia, no al final). Refinado D1–D6 con David el 25-26 nov: sección «Refinado», abajo.
 
 ## Context and Problem Statement
 
@@ -77,11 +77,11 @@ Mientras tanto, cada capability que aterriza añade registros sin identidad: la 
 
 ## Refinado (25-26 nov 2026, chat con David)
 
-- **D1 — Regla de cierre de históricos:** backfill idempotente a `system_default` en el propio bootstrap (se ejecuta en [ADR-012-005] #116); nadie pierde acceso al subir la familia y la regla queda auditable en git.
+- **D1 — Regla de cierre de históricos:** backfill idempotente a `system_default` en el propio bootstrap (se ejecuta en [ADR-012-005] #116); nadie pierde acceso al subir la familia y la regla queda auditable en git. **Ejecutado (26 nov, #116):** `ensure_owners` en el arranque de worker y core-mcp, set_payload dirigido por filtro (is_empty/is_null sobre `owner`) sobre TODAS las colecciones registradas — sello plano a `system_default` (decisión de David: DoD literal, sin resolución de slug real por join; y cobertura también de la colección de imágenes).
 - **D2 — Declaración de entidades:** fichero **YAML montado** en el despliegue ([ADR-012-001] #112); la env var queda descartada: cualquier aplicación consumidora podría leerse el env de entidades según el caso de uso.
 - **D3 — owner ≠ visibility:** la titularidad (`owner`, metadata nueva) y el flag `visibility` preexistente son dos conceptos separados ([ADR-012-004] #115); base del RBAC posterior y del cruce de conocimientos entre propietarios, sin fusión ni renombrado.
 - **D4 — Alcance del veneno:** la entidad declarada y no registrada es fallo determinista en TODAS las task types ([ADR-012-002] #113); la frontera es una sola.
-- **D5 — Resolución del slug a la escritura:** sin columna slug duplicada en `tasks` (doble verdad de la misma entidad); el `owner` del punto Qdrant es el slug de la entidad titular resuelto a la escritura con un join contra `entities` — el mismo helper que reutiliza el backfill de #116. Fallback de legado: task pre-familia aún PENDING sin columna estampada → titularidad por sesión, documentada (idéntico al actor `None` de `error_history`).
+- **D5 — Resolución del slug a la escritura:** sin columna slug duplicada en `tasks` (doble verdad de la misma entidad); el `owner` del punto Qdrant es el slug de la entidad titular resuelto a la escritura con un join contra `entities` — el mismo helper que reutiliza el backfill de #116. Fallback de legado: task pre-familia aún PENDING sin columna estampada → titularidad por sesión, documentada (idéntico al actor `None` de `error_history`). *(Nota del #116: el backfill final sella plano a `system_default` por decisión explícita de David — DoD literal del issue; la resolución por join queda como opción futura si algún histórico exige re-atribución.)*
 - **D6 — Identidad en primer nivel relacional (26 nov, David):** actor y titularidad viven en COLUMNAS (`tasks.actor`, `tasks.entity_id`), JAMÁS enterrados en el JSONB del contexto ([ADR-012-003] #114 re-homeado, [ADR-012-004] #115): un `actor`/`owner` en el `task_payload` rebota por `extra=forbid` — nada de identidad viaja por contrato. `tenant_id` preexistente de los puntos queda intacto (D3 en ambas direcciones: aislamiento de cómputo ≠ titularidad legible); el owner del punto es el slug, el amend NO reescribe titularidad — estampa `amend_entity`/`amend_actor` idempotentes como traza del corrector; el residuo JSONB de la ventana pre-re-home se respeta como historia (append-only).
 - **Orden de ejecución:** esta familia precede a la del ADR-010 (#93): cada capability que aterrice sin identidad amplía el retro-fit que la visibilidad deberá cubrir después.
 
@@ -99,16 +99,16 @@ Mientras tanto, cada capability que aterriza añade registros sin identidad: la 
 # ISSUES
 
 ### [ADR-012-001] Provisión declarativa de entidades (YAML montado + bootstrap idempotente) — #112
-Pendiente (25 nov). Oráculo de registro para la resolución de la frontera.
+Implementado y validado (25 nov; PR #119 mergeada a la rama padre). Oráculo de registro para la resolución de la frontera.
 
 ### [ADR-012-002] Resolución de identidad en la frontera de despacho — #113
-Pendiente (25 nov). Los tres casos de resolución, fin de la auto-vivificación, `tasks.entity_id` aditiva (dueño para la DLQ de la 4.4).
+Implementado y validado (25 nov; PR #120 mergeada a la rama padre). Los tres casos de resolución, fin de la auto-vivificación, `tasks.entity_id` aditiva (dueño para la DLQ de la 4.4).
 
 ### [ADR-012-003] Actor en el contexto de la tarea — #114
-Pendiente (25 nov). Free-string de trazabilidad con default = entidad resuelta; enriquece logs del worker y `error_history`.
+Implementado y validado (26 nov; PR #121 mergeada a la rama padre). Free-string de trazabilidad con default = entidad resuelta; enriquece logs del worker y `error_history`; re-homeado a columna `tasks.actor` en el #115 (D6).
 
 ### [ADR-012-004] Titularidad por registro en la escritura (owner ≠ visibility) — #115
-Pendiente (25 nov). `owner` estampado desde el contexto en Qdrant y Postgres; separación explícita de `owner` y `visibility` (D3).
+Implementado y validado (26 nov; PR #122 mergeada a la rama padre). `owner` estampado desde el contexto en Qdrant y Postgres; separación explícita de `owner` y `visibility` (D3).
 
 ### [ADR-012-005] Visibilidad por registro en el recall + regla de cierre de históricos — #116
-Pendiente (25 nov). Filtro opcional de propietario en `coreai_search_context`, restauración del hueco de la PR #70 en `_build_filter` y backfill idempotente de históricos a `system_default` (D1).
+En curso (26 nov). Filtro opcional de propietario en el recall (texto e imagen, simetría decidida por David), restauración del hueco de la PR #70 en `_build_filter` como filtro por `owner`, y backfill idempotente de históricos a `system_default` (D1, `ensure_owners` en el arranque).
