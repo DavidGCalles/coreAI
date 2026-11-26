@@ -185,7 +185,10 @@ async def test_worker_boot_creates_all_collections_on_clean_deploy(monkeypatch):
     dims correctas — cero intervención manual.
     """
     client = _client_with_collections()
-    monkeypatch.setattr("src.worker.get_qdrant_client", AsyncMock(return_value=client))
+    monkeypatch.setattr("src.db.vector_db.get_qdrant_client", AsyncMock(return_value=client))
+    # Seam corregido: tras el BUG-011 (#118) el worker ya NO importa el
+    # cliente — la garantía es ensure_collections y el singleton vive en
+    # src.db.vector_db (donde se resuelve en runtime: ahí se parchea)
 
     await ensure_collections()
 
@@ -208,7 +211,10 @@ async def test_worker_boot_idempotent_with_full_valid_topology(monkeypatch):
     topology = {name: (384, qmodels.Distance.COSINE) for name in TEXT_COLLECTIONS}
     topology[IMAGE_COLLECTION] = (1024, qmodels.Distance.COSINE)
     client = _client_with_collections(*topology.keys(), by_name=topology)
-    monkeypatch.setattr("src.worker.get_qdrant_client", AsyncMock(return_value=client))
+    monkeypatch.setattr("src.db.vector_db.get_qdrant_client", AsyncMock(return_value=client))
+    # Seam corregido: tras el BUG-011 (#118) el worker ya NO importa el
+    # cliente — la garantía es ensure_collections y el singleton vive en
+    # src.db.vector_db (donde se resuelve en runtime: ahí se parchea)
 
     await ensure_collections()
 
@@ -225,7 +231,10 @@ async def test_worker_boot_fails_loud_on_wrong_text_dims(monkeypatch):
     tarea, en el upsert, con el error tragándose los seeds.
     """
     client = _client_with_collections("document", "conversation", size=768)
-    monkeypatch.setattr("src.worker.get_qdrant_client", AsyncMock(return_value=client))
+    monkeypatch.setattr("src.db.vector_db.get_qdrant_client", AsyncMock(return_value=client))
+    # Seam corregido: tras el BUG-011 (#118) el worker ya NO importa el
+    # cliente — la garantía es ensure_collections y el singleton vive en
+    # src.db.vector_db (donde se resuelve en runtime: ahí se parchea)
 
     with pytest.raises(ValueError) as exc_info:
         await ensure_collections()

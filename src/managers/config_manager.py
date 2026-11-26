@@ -61,6 +61,17 @@ class ConfigManager:
             "log_level": os.getenv("LOG_LEVEL", "INFO")
         }
 
+    def get_entities_file_path(self) -> str:
+        """
+        Ruta del fichero YAML de provisión declarativa de entidades (ADR-012-001 #112).
+
+        El contenido de las entidades NUNCA viaja por env (D2 del ADR-012):
+        esta variable solo apunta al fichero montado por el despliegue desde
+        el volumen de datos. Fichero ausente o vacío = arranque normal con
+        solo system_default; malformado = error determinista al arranque.
+        """
+        return os.getenv("ENTITIES_FILE", "/app/entities/entities.yaml")
+
     def get_retry_config(self) -> dict[str, Any]:
         """
         Configuración de reintentos de tareas (4.4-001 #103).

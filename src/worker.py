@@ -4,12 +4,19 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.database import AsyncSessionLocal
 from src.db.bootstrap import ensure_relational_schema
+from src.db.entities_config import EntitiesProvisionError
 from src.repositories.relational import TaskRepository
-from src.logging_config import configure_logging, set_current_task_id, clear_current_task_id
+from src.logging_config import (
+    configure_logging,
+    set_current_task_id,
+    clear_current_task_id,
+    set_current_actor,
+    clear_current_actor,
+)
 from src.managers.config_manager import config_manager
 from src.workers.task_router import route_task
 from src.workers.failure_classification import es_fallo_determinista
-from src.db.vector_db import ensure_collections
+from src.db.vector_db import ensure_collections, ensure_owners
 
 configure_logging(level=config_manager.get_app_config()["log_level"])
 logger = logging.getLogger("coreai-worker")
@@ -69,7 +76,7 @@ async def garantia_arranque() -> None:
 
     Orden: esquema primero — el claim es lo primero que toca el bucle.
 
-    Sin engine.dispose() tras el ensure_relacional_schema: ese cierre
+    Sin engine.dispose() tras el ensure_relational_schema: ese cierre
     existe en core-mcp porque SU bootstrap corre en un event loop efímero
     que se cierra antes de servir; el worker vive entero en UN solo loop
     (asyncio.run(worker_loop())), así que las conexiones de pool creadas
@@ -87,6 +94,15 @@ async def garantia_arranque() -> None:
             await ensure_relational_schema()
             logger.info("Esquema relacional garantizado al arranque (BUG-011 #107)")
             break
+        except EntitiesProvisionError as entities_error:
+            # [ADR-012-001] #112: provisión malformado = fallo DETERMINISTA de
+            # configuración — reintentar es reintentar el mismo fichero. Sin
+            # backoff: el arranque muere aquí, explícito y con fichero y razón.
+            logger.error(
+                "Provisión declarativa de entidades inválida, arranque abortado: %s",
+                entities_error,
+            )
+            raise
         except Exception as init_error:
             logger.error(
                 "No se pudo garantizar el esquema relacional: %s — reintento en %.1fs",
@@ -99,13 +115,17 @@ async def garantia_arranque() -> None:
     # Colecciones con backoff (ADR-007-002 #50, BUG-001 #34). Qdrant puede
     # estar todavía levantándose (el worker no declara depends_on sobre
     # él). Pero NO se consume la cola hasta que la topología completa esté
-    # garantizada y validada.
+    # garantizada y validada. Junto a la topología corre el backfill de
+    # titularidad (D1 del ADR-012, [ADR-012-005] #116): los puntos
+    # históricos sin owner quedan sellados a `system_default` antes de
+    # consumir — nadie pierde acceso al subir la familia.
     # =================================================================
     boot_backoff = INITIAL_BACKOFF
     while True:
         try:
             await ensure_collections()
-            logger.info("Colecciones Qdrant garantizadas al arranque")
+            await ensure_owners()
+            logger.info("Colecciones Qdrant garantizadas al arranque (con backfill de titularidad)")
             break
         except Exception as init_error:
             logger.error(
@@ -147,6 +167,12 @@ async def worker_loop():
                     # Con el id capturado, el fallo de ejecución SIEMPRE aterriza
                     # en fail_task (que ya trabaja por UUID, sin tocar el ORM).
                     task_id = task.id
+                    # El actor también se captura ANTES (misma máscara greenlet):
+                    # columna de primer nivel estampada por el dispatch desde el
+                    # re-home del #115 (el declarado o el slug de la entidad
+                    # resuelta). Las tareas históricas anteriores al re-home no
+                    # la llevan (NULL): el filtro renderiza el placeholder "-".
+                    actor_actual = task.actor
                     
                     try:
                         # Traza Loki por UUID (Issue 4.3, ADR-003): el contexto de
@@ -155,6 +181,10 @@ async def worker_loop():
                         # lo renderiza como task=<uuid>; en Loki/Grafana se busca
                         # el UUID y aparece la traza completa del ciclo de vida.
                         set_current_task_id(task_id)
+                        # Traza de actor (ADR-012-003, #114): mismo filtro, mismo
+                        # ciclo — cada línea lleva también actor=<valor>, la
+                        # trazabilidad de QUIÉN despachó de la DLQ a Grafana.
+                        set_current_actor(actor_actual)
                         
                         # Fase 2: Trabajo en memoria delegando al Enrutador (Registry)
                         await route_task(task, session)
@@ -172,9 +202,10 @@ async def worker_loop():
                         logger.error("Fallo ejecutando tarea %s: %s", task_id, execution_error)
                         await _resolver_fallo(repo, task_id, execution_error)
                     finally:
-                        # El ciclo de la tarea termina (bien o mal): suelta el
-                        # UUID del contexto para no filtrarlo a la siguiente.
+                        # El ciclo de la tarea termina (bien o mal): suelta las
+                        # claves de contexto para no filtrarlas a la siguiente.
                         clear_current_task_id()
+                        clear_current_actor()
                 else:
                     # Cola vacía: relajamos el polling progresivamente
                     await asyncio.sleep(backoff)

@@ -17,6 +17,9 @@ Valida:
 - Descripción textual (BUG-009 #84): el content opcional del contrato viaja
   TAL CUAL al payload del punto — presente si se registró, None si no
   (retrocompatible).
+- Owner legible ([ADR-012-004] #115): slug de la entidad titular como clave
+  plana del punto (despachante desde el #113, sesión como fallback de
+  legado), junto al tenant_id intacto (D3: aislamiento ≠ titularidad).
 - Telemetría simétrica con el flujo textual: factura de tokens en llm_audit.
 - Fallos legítimos: gateway caído (rollback + re-raise), embedding vacío,
   corrupción de cola (sin extracción tolerante — ADR-006).
@@ -69,7 +72,7 @@ def _db_session():
     return db_session
 
 
-def _image_task(**payload_overrides):
+def _image_task(entity_id=None, **payload_overrides):
     """Tarea de imagen auto-anclada: sin text_event_id, con project (FR-3 #51)."""
     payload = {
         "task_type": TaskType.VECTORIZE_IMAGE_EVENT.value,
@@ -81,6 +84,7 @@ def _image_task(**payload_overrides):
     payload.update(payload_overrides)
     return Task(
         id=TASK_ID,
+        entity_id=entity_id,
         session_id=SESSION_ID,
         status=TaskStatus.RUNNING,
         payload=payload,
@@ -109,9 +113,10 @@ def _session_mock(*execute_results):
 # =====================================================================
 
 @pytest.mark.asyncio
+@patch("src.workers.task_router.EntityRepository")
 @patch("src.workers.task_router.get_qdrant_client", new_callable=AsyncMock)
 @patch("src.workers.task_router.LLMClient")
-async def test_happy_path(mock_llm_client_class, mock_get_qdrant):
+async def test_happy_path(mock_llm_client_class, mock_get_qdrant, mock_entity_repo_class):
     """
     Sesión resuelta → imagen vectorizada vía gateway → punto en la colección
     de imágenes anclado a su sesión y a su proyecto. Nada más, nada menos.
@@ -125,6 +130,9 @@ async def test_happy_path(mock_llm_client_class, mock_get_qdrant):
     llm_instance = AsyncMock()
     llm_instance.generate_embedding.return_value = _gateway_response()
     mock_llm_client_class.return_value = llm_instance
+
+    # [ADR-012-004] #115: el join contra entities resuelve el slug legible
+    mock_entity_repo_class.return_value.get_slug = AsyncMock(return_value="owner-de-test")
 
     await handle_vectorize_image_event(task, session_mock)
 
@@ -155,6 +163,10 @@ async def test_happy_path(mock_llm_client_class, mock_get_qdrant):
     assert point.payload["project"] == "elios-workshop"
     assert point.payload["domain"] == "system"
     assert point.payload["visibility"] == "private"
+    # [ADR-012-004] #115: owner legible del titular (fallback de legado por
+    # sesión: la task no trae columna), tenant_id intacto a su lado
+    mock_entity_repo_class.return_value.get_slug.assert_awaited_once_with(ENTITY_ID)
+    assert point.payload["owner"] == "owner-de-test"
 
     # 4. Telemetría simétrica con el flujo textual: factura en llm_audit
     session_mock.add.assert_called_once()
@@ -169,9 +181,10 @@ async def test_happy_path(mock_llm_client_class, mock_get_qdrant):
 
 
 @pytest.mark.asyncio
+@patch("src.workers.task_router.EntityRepository")
 @patch("src.workers.task_router.get_qdrant_client", new_callable=AsyncMock)
 @patch("src.workers.task_router.LLMClient")
-async def test_project_defaults_to_none(mock_llm_client_class, mock_get_qdrant):
+async def test_project_defaults_to_none(mock_llm_client_class, mock_get_qdrant, mock_entity_repo_class):
     """Sin proyecto explícito el punto aterriza con project=None (FR-3 opcional)."""
     session_mock = _session_mock(_session_result(_db_session()))
     task = _image_task()
@@ -183,18 +196,22 @@ async def test_project_defaults_to_none(mock_llm_client_class, mock_get_qdrant):
     llm_instance.generate_embedding.return_value = _gateway_response()
     mock_llm_client_class.return_value = llm_instance
 
+    mock_entity_repo_class.return_value.get_slug = AsyncMock(return_value="owner-de-test")
+
     await handle_vectorize_image_event(task, session_mock)
 
     point = qdrant_mock.upsert.call_args.kwargs["points"][0]
     assert point.payload["project"] is None
     assert point.payload["content"] is None  # sin content registrado: comportamiento actual intacto
     assert point.payload["session_id"] == str(SESSION_ID)
+    assert point.payload["owner"] == "owner-de-test"
 
 
 @pytest.mark.asyncio
+@patch("src.workers.task_router.EntityRepository")
 @patch("src.workers.task_router.get_qdrant_client", new_callable=AsyncMock)
 @patch("src.workers.task_router.LLMClient")
-async def test_content_lands_in_point_payload(mock_llm_client_class, mock_get_qdrant):
+async def test_content_lands_in_point_payload(mock_llm_client_class, mock_get_qdrant, mock_entity_repo_class):
     """
     BUG-009 (#84): la descripción textual del contrato viaja TAL CUAL al
     payload del punto. El hit del recall deja de ser un puntero opaco:
@@ -210,6 +227,8 @@ async def test_content_lands_in_point_payload(mock_llm_client_class, mock_get_qd
     llm_instance.generate_embedding.return_value = _gateway_response()
     mock_llm_client_class.return_value = llm_instance
 
+    mock_entity_repo_class.return_value.get_slug = AsyncMock(return_value="owner-de-test")
+
     await handle_vectorize_image_event(task, session_mock)
 
     point = qdrant_mock.upsert.call_args.kwargs["points"][0]
@@ -219,6 +238,40 @@ async def test_content_lands_in_point_payload(mock_llm_client_class, mock_get_qd
     llm_instance.generate_embedding.assert_awaited_once()
     request = llm_instance.generate_embedding.call_args[0][0]
     assert request.modality == "image"
+
+
+@pytest.mark.asyncio
+@patch("src.workers.task_router.EntityRepository")
+@patch("src.workers.task_router.get_qdrant_client", new_callable=AsyncMock)
+@patch("src.workers.task_router.LLMClient")
+async def test_owner_es_el_slug_del_despachante_no_de_la_sesion(
+    mock_llm_client_class, mock_get_qdrant, mock_entity_repo_class
+):
+    """
+    [ADR-012-004] #115: titularidad por registro en la escritura — el owner
+    del punto es el slug del DESPACHANTE (task.entity_id, #113), resuelto a
+    la escritura aunque la sesión viva a nombre de otra entidad. tenant_id
+    queda intacto a su lado (D3: aislamiento ≠ titularidad).
+    """
+    titular = uuid.uuid4()
+    session_mock = _session_mock(_session_result(_db_session()))  # otra entidad
+    task = _image_task(entity_id=titular)
+
+    qdrant_mock = AsyncMock()
+    mock_get_qdrant.return_value = qdrant_mock
+    llm_instance = AsyncMock()
+    llm_instance.generate_embedding.return_value = _gateway_response()
+    mock_llm_client_class.return_value = llm_instance
+
+    mock_entity_repo_class.return_value.get_slug = AsyncMock(return_value="frontier-david")
+
+    await handle_vectorize_image_event(task, session_mock)
+
+    # El slug se resuelve del DESPACHANTE, no del dueño de la sesión
+    mock_entity_repo_class.return_value.get_slug.assert_awaited_once_with(titular)
+    point = qdrant_mock.upsert.call_args.kwargs["points"][0]
+    assert point.payload["owner"] == "frontier-david"
+    assert point.payload["tenant_id"] == str(titular)
 
 
 # =====================================================================
@@ -265,14 +318,16 @@ async def test_non_dict_payload_aborts():
 # =====================================================================
 
 @pytest.mark.asyncio
+@patch("src.workers.task_router.EntityRepository")
 @patch("src.workers.task_router.get_qdrant_client", new_callable=AsyncMock)
 @patch("src.workers.task_router.LLMClient")
-async def test_gateway_down_rolls_back_and_reraises(mock_llm_client_class, mock_get_qdrant):
+async def test_gateway_down_rolls_back_and_reraises(mock_llm_client_class, mock_get_qdrant, mock_entity_repo_class):
     """Cortafuegos del flujo textual: nada a medias queda en la transacción."""
     session_mock = _session_mock(_session_result(_db_session()))
     llm_instance = AsyncMock()
     llm_instance.generate_embedding.side_effect = httpx.RequestError("gateway caído")
     mock_llm_client_class.return_value = llm_instance
+    mock_entity_repo_class.return_value.get_slug = AsyncMock(return_value="owner-de-test")
 
     with pytest.raises(httpx.RequestError):
         await handle_vectorize_image_event(_image_task(), session_mock)
@@ -283,14 +338,16 @@ async def test_gateway_down_rolls_back_and_reraises(mock_llm_client_class, mock_
 
 
 @pytest.mark.asyncio
+@patch("src.workers.task_router.EntityRepository")
 @patch("src.workers.task_router.get_qdrant_client", new_callable=AsyncMock)
 @patch("src.workers.task_router.LLMClient")
-async def test_empty_embedding_is_legible_failure(mock_llm_client_class, mock_get_qdrant):
+async def test_empty_embedding_is_legible_failure(mock_llm_client_class, mock_get_qdrant, mock_entity_repo_class):
     """Imagen ilegible/corrupta para el modelo de visión: error legible, sin factura."""
     session_mock = _session_mock(_session_result(_db_session()))
     llm_instance = AsyncMock()
     llm_instance.generate_embedding.return_value = _gateway_response(embedding=())
     mock_llm_client_class.return_value = llm_instance
+    mock_entity_repo_class.return_value.get_slug = AsyncMock(return_value="owner-de-test")
 
     with pytest.raises(ValueError) as exc_info:
         await handle_vectorize_image_event(_image_task(), session_mock)

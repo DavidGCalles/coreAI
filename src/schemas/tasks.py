@@ -1,8 +1,15 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Any
 from uuid import UUID
 from enum import StrEnum
 from datetime import datetime
+
+from src.db.entities_config import ID_PATTERN, MAX_ID_LENGTH
+
+# Techo de forma del actor (ADR-012-003, #114): el free-string de trazabilidad
+# se valida SOLO en longitud — sin censo, sin pattern, sin semántica. La
+# autenticación del humano vive en el edge, JAMÁS en el core.
+MAX_ACTOR_LENGTH = 128
 
 class TaskType(StrEnum):
     """Catálogo estricto de capacidades del Córtex Asíncrono."""
@@ -19,7 +26,15 @@ class TaskDispatchRequest(BaseModel):
     """
     Contrato estricto para la ingesta de tareas vía MCP.
     Fuerza al cliente a estructurar su caos antes de tocar la base de datos.
+
+    Sobre plano y cerrado (ADR-012-002, #113): las claves desconocidas
+    rebotan. El sobre del despacho es del sustrato, y el `entity_id` UUID
+    legacy (muerto con la auto-vivificación) no puede colar silencioso: un
+    remitente estancado se entera AQUÍ, no cuando su tarea aparece
+    titulada a otro.
     """
+    model_config = ConfigDict(extra="forbid")
+
     task_type: TaskType = Field(
         ..., 
         description="Identificador exacto del tipo de tarea. Solo se aceptan los valores listados."
@@ -32,14 +47,67 @@ class TaskDispatchRequest(BaseModel):
         None, 
         description="Opcional. UUID de la sesión si la tarea pertenece a un hilo existente."
     )
-    entity_id: UUID | None = Field(
-        None, 
-        description="Opcional. UUID del dueño. Si se omite junto con session_id, el sistema auto-asignará uno."
+    entity: str | None = Field(
+        None,
+        pattern=ID_PATTERN.pattern,
+        max_length=MAX_ID_LENGTH,
+        description=(
+            "Opcional. Slug de la identidad que despacha (ADR-012-002), tal "
+            "como vive registrada en el despliegue (YAML + bootstrap, "
+            "ADR-012-001). Declarada y registrada: la respuesta devuelve su "
+            "entity_id resuelta. Declarada y NO registrada: fallo "
+            "determinista con el catálogo de entidades válidas, la tarea no "
+            "se crea y reintentar no sirve. Ausente: system_default, "
+            "explícito en la respuesta."
+        ),
+    )
+    actor: str | None = Field(
+        None,
+        max_length=MAX_ACTOR_LENGTH,
+        description=(
+            "Opcional. Free-string de QUIÉN despacha dentro del namespace "
+            "de la entidad (ADR-012-003): trazabilidad, no identidad. Sin "
+            "censo de actores ni lo habrá, y sin validación semántica — "
+            "solo forma (techo de 128 caracteres, unicode libre). Vacío o "
+            "solo espacios = ausente: el actor por omisión es el slug de "
+            "la entidad resuelta. JAMÁS genera veneno: el único veneno de "
+            "identidad es el de ENTIDAD no registrada (D4). La "
+            "autenticación del humano vive en el edge, JAMÁS en el core."
+        ),
     )
 
 class TaskDispatchResponse(BaseModel):
+    """
+    Desenlace del dispatch: la tarea en PENDING, la identidad YA resuelta y
+    el actor de trazabilidad YA estampado.
+    [ADR-012-002] #113: la entity_id viaja SIEMPRE — también cuando el
+    despacho no declaró identidad (system_default explícito): la resolución
+    deja de ser silenciosa.
+    [ADR-012-003] #114: el actor viaja SIEMPRE — el declarado o, por
+    omisión, el slug de la entidad resuelta. El estampado tampoco es
+    silencioso y se verifica sin provocar fallos.
+    """
     task_id: UUID
     session_id: UUID
+    entity_id: UUID = Field(
+        ...,
+        description=(
+            "Entidad que la frontera resolvió contra el registro del "
+            "despliegue: la titularidad de la fila y de la sesión huérfana "
+            "si se vivificó."
+        ),
+    )
+    actor: str = Field(
+        ...,
+        description=(
+            "Actor de trazabilidad estampado en la tarea "
+            "(ADR-012-003): el declarado por el despachante o, por "
+            "omisión, el slug de la entidad resuelta. Vive en la COLUMNA "
+            "de primer nivel de la fila (re-home del #115), visible en "
+            "el contexto de ejecución, en el log del worker y en cada "
+            "entrada de error_history."
+        ),
+    )
     status: str = "PENDING"
 
 class TaskGetRequest(BaseModel):
@@ -48,7 +116,7 @@ class TaskGetRequest(BaseModel):
     Única clave de consulta: el task_id tal como lo devolvió coreai_dispatch_task.
     """
     task_id: UUID = Field(
-        ...,
+        ..., 
         description="UUID de la tarea, tal como lo devolvió coreai_dispatch_task."
     )
 
@@ -66,7 +134,7 @@ class TaskStatusResponse(BaseModel):
         description="Tipo de la tarea, extraído del JSONB payload. None si el payload está corrupto."
     )
     status: str = Field(
-        ...,
+        ..., 
         description="PENDING | RUNNING | COMPLETED | FAILED."
     )
     error_trace: str | None = Field(

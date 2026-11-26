@@ -119,13 +119,20 @@ class HybridMemoryManager:
         content: str,
         visibility: Visibility,
         metadata: dict[str, Any],
-        project: str | None = None
+        project: str | None = None,
+        owner: str | None = None
     ) -> Event:
         """
         Inyección dual SIN commit: evento relacional (flush), embedding
         (con su auditoría) y upsert en Qdrant. El commit pertenece al
         método llamador, dueño de la transacción — así la consolidación
         puede inyectar el resumen Y marcar los orígenes en UNA sola.
+
+        [ADR-012-004] #115: el `owner` es el slug de la entidad titular,
+        resuelto a la escritura por el llamador (join contra entities).
+        El lado relacional del texto ya es Event.entity_id (FK): solo el
+        punto Qdrant necesitaba la forma legible. JAMÁS llega por el
+        payload del contrato (extra=forbid lo rebota en la frontera).
         """
         # 1. Inserción Relacional (Flush para generar UUID, SIN commit)
         new_event = await self.relational_repo.create(
@@ -145,7 +152,12 @@ class HybridMemoryManager:
             "tenant_id": str(entity_id),
             "content": content,
             "metadata": metadata,
-            "project": project
+            "project": project,
+            # Owner legible ([ADR-012-004] #115): slug de la entidad
+            # titular resuelto a la escritura. tenant_id preexistente NO
+            # se toca (multitenancy diferida, D3 en ambas direcciones):
+            # tenant_id es aislamiento de cómputo, owner es titularidad.
+            "owner": owner
         }
 
         await self.vector_repo.upsert(
@@ -157,16 +169,17 @@ class HybridMemoryManager:
         return new_event
 
     async def add_memory(
-        self, 
-        entity_id: uuid.UUID, 
-        domain: DomainType, 
-        content: str, 
+        self,
+        entity_id: uuid.UUID,
+        domain: DomainType,
+        content: str,
         visibility: Visibility = Visibility.PRIVATE,
         metadata: dict[str, Any] = None,
-        project: str | None = None
+        project: str | None = None,
+        owner: str | None = None
     ) -> uuid.UUID:
         metadata = metadata or {}
-        
+
         try:
             new_event = await self._inject_memory(
                 entity_id=entity_id,
@@ -174,7 +187,8 @@ class HybridMemoryManager:
                 content=content,
                 visibility=visibility,
                 metadata=metadata,
-                project=project
+                project=project,
+                owner=owner
             )
             
             # 4. Consistencia: Asentamos la transacción y la auditoría
@@ -248,7 +262,8 @@ class HybridMemoryManager:
         self,
         entity_id: uuid.UUID,
         domain: DomainType,
-        time_window: str
+        time_window: str,
+        owner: str | None = None
     ) -> uuid.UUID | None:
         """
         Consolida la memoria episódica antigua de un inquilino+dominio (Issue 4.3, #29).
@@ -305,7 +320,12 @@ class HybridMemoryManager:
                 domain=domain,
                 content=resumen,
                 visibility=_visibilidad_mas_restrictiva(candidatos),
-                metadata=metadata
+                metadata=metadata,
+                # Owner del consolidate = la entidad de su contexto
+                # ([ADR-012-004] #115): el resumen queda a nombre de su
+                # inquilino, sin re-atribución v1 — la titularidad no se
+                # reinterpreta en la consolidación.
+                owner=owner
             )
 
             # 3. Los orígenes quedan marcados: nunca vuelven a una ventana
@@ -365,9 +385,11 @@ class HybridMemoryManager:
     # efímero que nunca se persiste.
 
     # La resolución de identidad multi-tenant queda DIFERIDA a su propia
-    # pieza de diseño: el recall v1 no filtra por tenant. Los puntos
-    # conservan tenant_id en su payload (la ingesta lo escribe), así
-    # que restaurar el aislamiento es un cambio local en el filtro.
+    # pieza de diseño: el recall sigue sin filtrar por tenant y los puntos
+    # conservan tenant_id en su payload (la ingesta lo escribe), así que
+    # restaurar el aislamiento es un cambio local en el filtro. La
+    # visibilidad por registro del ADR-012 (ADR-012-005, #116) es el
+    # filtro OPCIONAL de titularidad: owner=None = todo lo visible hoy.
 
     async def _embed_query_texto(self, query: str) -> list[float]:
         """
@@ -415,6 +437,9 @@ class HybridMemoryManager:
 
         Claves planas del payload, sin jerarquías: lo que ve el cliente es
         lo que hay en el punto (higiene de superficies, decisión 26 oct).
+        El owner viaja en el hit (ADR-012-005): la titularidad es visible,
+        nunca silenciosa — mismo contrato de salida que el entity_id del
+        dispatch en el #113.
         """
         payload = point.payload or {}
         return MemoryHit(
@@ -424,12 +449,14 @@ class HybridMemoryManager:
             content=payload.get("content"),
             session_id=payload.get("session_id"),
             project=payload.get("project"),
+            owner=payload.get("owner"),
         )
 
     async def recall_text(
         self,
         query: str,
         project: str | None = None,
+        owner: str | None = None,
         top_k: int = 5,
         score_threshold: float = 0.7
     ) -> list[MemoryHit]:
@@ -440,6 +467,11 @@ class HybridMemoryManager:
         fusiona los resultados en un solo ranking por score y recorta a
         top_k DESPUÉS del merge (decisión 26 oct): el ranking pertenece a la
         consulta, no a la colección. Cada hit lleva su colección de origen.
+
+        Filtro opcional de titularidad (ADR-012-005, #116): owner='A' = solo
+        puntos con owner=A; owner=None = comportamiento actual, todo lo
+        visible hoy (retrocompatible: nadie pierde acceso al subir la
+        familia).
 
         Colección inexistente = MissingCollectionError ANTES de embeber:
         un fallo de inicialización no se disfraza de no-match honesto.
@@ -460,6 +492,7 @@ class HybridMemoryManager:
         for domain in DomainType:
             filters = MemorySearchFilters(
                 project=project,
+                owner=owner,
                 limit=top_k,
                 score_threshold=score_threshold
             )
@@ -480,6 +513,7 @@ class HybridMemoryManager:
         self,
         image_data_uri: str,
         project: str | None = None,
+        owner: str | None = None,
         top_k: int = 5,
         score_threshold: float = 0.5
     ) -> list[MemoryHit]:
@@ -490,6 +524,10 @@ class HybridMemoryManager:
         hit plano) sobre el espacio de visión (jina-clip-v2, 1024 dims).
         La imagen de consulta NO se persiste: embed efímero. Sin matches
         sobre el umbral = no-match honesto (lista vacía).
+
+        Filtro opcional de titularidad (ADR-012-005, #116), simétrico con
+        el recall de texto: owner='A' = solo puntos con owner=A;
+        owner=None = comportamiento actual.
         """
         existentes = await self.vector_repo.collection_names()
         if IMAGE_COLLECTION not in existentes:
@@ -504,6 +542,7 @@ class HybridMemoryManager:
 
         filters = MemorySearchFilters(
             project=project,
+            owner=owner,
             limit=top_k,
             score_threshold=score_threshold
         )

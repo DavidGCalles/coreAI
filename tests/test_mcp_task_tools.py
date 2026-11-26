@@ -1,12 +1,13 @@
 import pytest
 import json
 import uuid
-from sqlalchemy import select, func, update
+from sqlalchemy import delete, select, func, update
 
 from src.db.database import AsyncSessionLocal, engine
 from src.db.models import Task, Session, Entity, TaskStatus
 from src.mcp.tools.task_tools import handle_task_tool
 from src.contracts import contract_uri
+
 
 @pytest.fixture
 async def db_session():
@@ -501,3 +502,387 @@ async def test_mcp_retry_failed_task_converges_without_double_application(db_ses
     # Limpieza manual
     await db_session.delete(task_in_db)
     await db_session.commit()
+
+# =====================================================================
+# ADR-012-002 (#113): frontera de identidad — los tres casos de resolución
+# =====================================================================
+
+async def _purge_entity_by_slug(db_session, slug):
+    """
+    Limpieza hermética e idempotente: retira la entidad de prueba con TODO lo
+    que cuelga de ella, en orden FK-seguro. tasks.entity_id NO lleva ondelete
+    (la titularidad es referencial, ADR-012-002): una task titulada bloquea
+    el DELETE de su entidad, así que se retira primero; las sesiones caerían
+    solas por el CASCADE de sessions.entity_id, pero se retiran a mano para
+    no depender del orden en que Postgres evalúa las restricciones.
+    Arranque y cierre del caso, para que runs sucesivos no pisen slugs ya
+    registrados (idx_entities_slug es unique).
+    """
+    entity_id = (await db_session.execute(
+        select(Entity.id).where(Entity.slug == slug)
+    )).scalar_one_or_none()
+    if entity_id is None:
+        return
+    await db_session.execute(
+        delete(Task)
+        .where(Task.entity_id == entity_id)
+        .execution_options(synchronize_session=False)
+    )
+    await db_session.execute(
+        delete(Session)
+        .where(Session.entity_id == entity_id)
+        .execution_options(synchronize_session=False)
+    )
+    await db_session.execute(
+        delete(Entity)
+        .where(Entity.id == entity_id)
+        .execution_options(synchronize_session=False)
+    )
+    await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_mcp_dispatch_identidad_declarada_registrada(db_session):
+    """
+    Caso 1 (ADR-012-002): declarada y registrada → la respuesta devuelve la
+    entity_id resuelta, la fila nace titulada y la sesión huérfana se liga
+    a la entidad declarada.
+    """
+    await _purge_entity_by_slug(db_session, "frontier-david")
+    declared = Entity(role="user", slug="frontier-david")
+    db_session.add(declared)
+    await db_session.commit()
+
+    arguments = {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": "Despacho con identidad declarada y registrada."},
+        "entity": "frontier-david",
+    }
+    response = await handle_task_tool("coreai_dispatch_task", arguments)
+
+    assert response["isError"] is False, f"El dispatch falló: {response}"
+    content = json.loads(response["content"][0]["text"])
+    assert content["entity_id"] == str(declared.id)
+
+    task_id = uuid.UUID(content["task_id"])
+    task_in_db = (await db_session.execute(
+        select(Task).where(Task.id == task_id)
+    )).scalar_one()
+    assert task_in_db.entity_id == declared.id, "La task no nació titulada a la declarada."
+
+    session_in_db = (await db_session.execute(
+        select(Session).where(Session.id == task_in_db.session_id)
+    )).scalar_one()
+    assert session_in_db.entity_id == declared.id, "La sesión huérfana no quedó ligada a la declarada."
+
+    await _purge_entity_by_slug(db_session, "frontier-david")
+
+@pytest.mark.asyncio
+async def test_mcp_dispatch_identidad_no_registrada_es_veneno(db_session):
+    """
+    Caso 2 / D4 (ADR-012-002): declarada y NO registrada → isError
+    DETERMINISTA con catálogo inline; read-only total: ni task en PENDING ni
+    RUNNING, ni sesión o entidad auto-vivificada. Y aplica a TODAS las task
+    types: la frontera es una sola.
+    """
+    before = await _row_counts(db_session)
+
+    arguments = {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": "Despacho con entidad fantasma."},
+        "entity": "frontier-fantasma",
+    }
+    response = await handle_task_tool("coreai_dispatch_task", arguments)
+
+    assert response["isError"] is True, "El slug no registrado debe rebotar en la frontera"
+    text = response["content"][0]["text"]
+    assert "frontier-fantasma" in text
+    assert "no está registrada" in text
+    assert "determinista" in text, "El error debe clasificarse como determinista"
+    assert "NO se encoló" in text
+    assert "system_default" in text, "El catálogo inline incluye al implícito"
+
+    after = await _row_counts(db_session)
+    assert after == before, f"El veneno dejó filas: antes {before}, después {after}"
+
+@pytest.mark.asyncio
+async def test_mcp_dispatch_identidad_ausente_resuelve_system_default(db_session):
+    """
+    Caso 3 (ADR-012-002): identidad ausente → system_default EXPLÍCITO en la
+    respuesta y en la titularidad de la fila. La resolución deja de ser
+    silenciosa sin exigir provisión previa al despachante (arranque autónomo)
+    y NINGÚN despacho crea entidades: implícito ≠ auto-vivificado.
+    """
+    before = await _row_counts(db_session)
+
+    arguments = {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": "Despacho sin identidad declarada."},
+    }
+    response = await handle_task_tool("coreai_dispatch_task", arguments)
+
+    assert response["isError"] is False, f"El dispatch falló: {response}"
+    content = json.loads(response["content"][0]["text"])
+
+    implicit = (await db_session.execute(
+        select(Entity).where(Entity.slug == "system_default")
+    )).scalar_one()  # garantizado por el bootstrap (ADR-012-001, conftest)
+    assert content["entity_id"] == str(implicit.id)
+
+    task_in_db = (await db_session.execute(
+        select(Task).where(Task.id == uuid.UUID(content["task_id"]))
+    )).scalar_one()
+    assert task_in_db.entity_id == implicit.id, "La task no quedó titulada al implícito."
+
+    after = await _row_counts(db_session)
+    assert after[0] == before[0] + 1, "la task"
+    assert after[1] == before[1] + 1, "la sesión huérfana vivificada"
+    assert after[2] == before[2], "NINGUNA entidad auto-vivificada: fin del patrón"
+
+    # Limpieza manual: solo lo creado por el caso (la fila del implícito es del
+    # bootstrap). Baja por bulk y en orden FK (task → sesión): el DELETE ORM en
+    # unidad-de-trabajo puede disparar la sesión primero y el CASCADE de
+    # tasks.session_id se llevaría la fila antes de que corra el DELETE de la
+    # task (SAWarning: 0 filas matcheadas). La bulk deletion ni siquiera hace
+    # planning en ORM: lo que se pide es lo que corre.
+    session_in_db = (await db_session.execute(
+        select(Session).where(Session.id == task_in_db.session_id)
+    )).scalar_one()
+    await db_session.execute(
+        delete(Task)
+        .where(Task.id == task_in_db.id)
+        .execution_options(synchronize_session=False)
+    )
+    await db_session.execute(
+        delete(Session)
+        .where(Session.id == session_in_db.id)
+        .execution_options(synchronize_session=False)
+    )
+    await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_mcp_dispatch_identidad_titula_con_sesion_explicita(db_session):
+    """
+    La identidad es del DESPACHO, no de la sesión: con session_id explícito
+    la task nace titulada a la entidad declarada aunque la sesión pertenezca
+    a otra entidad — la coherencia sesión↔despachante no es ley de la
+    frontera (ADR-012-002).
+    """
+    for slug in ("frontier-david", "frontier-owner"):
+        await _purge_entity_by_slug(db_session, slug)
+    declared = Entity(role="user", slug="frontier-david")
+    owner = Entity(role="user", slug="frontier-owner")
+    db_session.add_all([declared, owner])
+    await db_session.flush()
+    # Los modelos no definen relationships: la sesión se liga por entity_id
+    sesion_ajena = Session(entity_id=owner.id)
+    db_session.add(sesion_ajena)
+    await db_session.commit()
+
+    arguments = {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": "Despacho titulado al declarante con sesión ajena."},
+        "session_id": str(sesion_ajena.id),
+        "entity": "frontier-david",
+    }
+    response = await handle_task_tool("coreai_dispatch_task", arguments)
+
+    assert response["isError"] is False, f"El dispatch falló: {response}"
+    content = json.loads(response["content"][0]["text"])
+    assert content["session_id"] == str(sesion_ajena.id)
+    assert content["entity_id"] == str(declared.id)
+
+    task_in_db = (await db_session.execute(
+        select(Task).where(Task.id == uuid.UUID(content["task_id"]))
+    )).scalar_one()
+    assert task_in_db.entity_id == declared.id
+
+    for slug in ("frontier-david", "frontier-owner"):
+        await _purge_entity_by_slug(db_session, slug)
+
+@pytest.mark.asyncio
+async def test_mcp_dispatch_identidad_charset_invalido_rebota(db_session):
+    """
+    El charset del slug se valida en el BORDE (misma familia que la forma del
+    payload): mayúsculas o espacios rebota ANTES de abrir el registro, sin
+    tocar la BD.
+    """
+    before = await _row_counts(db_session)
+
+    response = await handle_task_tool("coreai_dispatch_task", {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": "Despacho con slug fuera de charset."},
+        "entity": "Slug-Invalido",
+    })
+
+    assert response["isError"] is True, "El slug fuera de charset debe rebotar en el borde"
+
+    after = await _row_counts(db_session)
+    assert after == before, f"El rechazo mutó la BD: antes {before}, después {after}"
+
+# =====================================================================
+# ADR-012-003 (#114), re-home ADR-012-004 (#115): actor en la COLUMNA de
+# primer nivel de la tarea — free-string de trazabilidad, default = slug
+# de la entidad resuelta, jamás veneno y jamás en el JSONB (D6)
+# =====================================================================
+
+async def _limpiar_task_y_sesion(db_session, task_id):
+    """Limpieza de un despacho titulado a system_default: bulk y en orden
+    FK (task → sesión), mismo patrón del caso 3 del ADR-012-002 (SAWarning
+    del DELETE ORM en unidad-de-trabajo)."""
+    task_in_db = (await db_session.execute(
+        select(Task).where(Task.id == task_id)
+    )).scalar_one()
+    await db_session.execute(
+        delete(Task)
+        .where(Task.id == task_in_db.id)
+        .execution_options(synchronize_session=False)
+    )
+    await db_session.execute(
+        delete(Session)
+        .where(Session.id == task_in_db.session_id)
+        .execution_options(synchronize_session=False)
+    )
+    await db_session.commit()
+
+@pytest.mark.asyncio
+async def test_mcp_dispatch_actor_por_omision_es_el_slug_resuelto(db_session):
+    """
+    Default por omisión (DoD #114): despacho sin actor → el contexto lleva
+    actor = la entidad resuelta. Decisión de David 25 nov: el valor es el
+    SLUG (legible en Grafana, coherente con el namespace free-string) — la
+    línea del DoD que decía 'entity_id' quedó des-actualizada al respecto
+    (documentado en la PR, mismo criterio que el #113).
+    """
+    arguments = {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": "Despacho sin actor declarado."},
+    }
+    response = await handle_task_tool("coreai_dispatch_task", arguments)
+
+    assert response["isError"] is False, f"El dispatch falló: {response}"
+    content = json.loads(response["content"][0]["text"])
+    assert content["actor"] == "system_default", "El default del actor es el slug implícito."
+
+    task_in_db = (await db_session.execute(
+        select(Task).where(Task.id == uuid.UUID(content["task_id"]))
+    )).scalar_one()
+    # [ADR-012-004] #115 re-home: el actor viaja en la COLUMNA de primer
+    # nivel; el JSONB queda limpio de identidad (D6).
+    assert task_in_db.actor == "system_default"
+    assert "actor" not in task_in_db.payload
+
+    await _limpiar_task_y_sesion(db_session, task_in_db.id)
+
+@pytest.mark.asyncio
+async def test_mcp_dispatch_actor_explicito_se_estampa_integro(db_session):
+    """
+    Actor explícito: el free-string viaja íntegro (sin normalizar más allá
+    del strip y sin interpretarlo), en la respuesta, en la COLUMNA de la
+    fila y con la identidad resuelta de siempre.
+    """
+    await _purge_entity_by_slug(db_session, "frontier-actor")
+    declared = Entity(role="user", slug="frontier-actor")
+    db_session.add(declared)
+    await db_session.commit()
+
+    arguments = {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": "Despacho con actor explícito."},
+        "entity": "frontier-actor",
+        "actor": "david-gomez",
+    }
+    response = await handle_task_tool("coreai_dispatch_task", arguments)
+
+    assert response["isError"] is False, f"El dispatch falló: {response}"
+    content = json.loads(response["content"][0]["text"])
+    assert content["entity_id"] == str(declared.id)
+    assert content["actor"] == "david-gomez"
+
+    task_in_db = (await db_session.execute(
+        select(Task).where(Task.id == uuid.UUID(content["task_id"]))
+    )).scalar_one()
+    # Re-home #115: columna de primer nivel, JSONB limpio de identidad
+    assert task_in_db.actor == "david-gomez"
+    assert "actor" not in task_in_db.payload
+
+    await _purge_entity_by_slug(db_session, "frontier-actor")
+
+@pytest.mark.asyncio
+async def test_mcp_dispatch_actor_default_con_entidad_declarada(db_session):
+    """
+    Default con identidad declarada: sin actor, el default es el SLUG de la
+    entidad resuelta (la frontera reutiliza la misma 'declarada' que acaba
+    de resolver — no es una segunda consulta).
+    """
+    await _purge_entity_by_slug(db_session, "frontier-actor")
+    declared = Entity(role="user", slug="frontier-actor")
+    db_session.add(declared)
+    await db_session.commit()
+
+    arguments = {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": "Despacho con entidad y sin actor."},
+        "entity": "frontier-actor",
+    }
+    response = await handle_task_tool("coreai_dispatch_task", arguments)
+
+    assert response["isError"] is False, f"El dispatch falló: {response}"
+    content = json.loads(response["content"][0]["text"])
+    assert content["actor"] == "frontier-actor"
+
+    await _purge_entity_by_slug(db_session, "frontier-actor")
+
+@pytest.mark.asyncio
+async def test_mcp_dispatch_actores_edge_sin_rechazo(db_session):
+    """
+    DoD #114: actores edge (vacío, espacios, unicode, longitud límite) NO
+    rechazan el despacho — el actor JAMÁS genera veneno. Vacío y puros
+    espacios se tratan como AUSENTE (default); unicode y el límite exacto
+    pasan íntegros.
+    """
+    casos = [
+        ("", "system_default"),                 # vacío → ausente → default
+        ("   ", "system_default"),               # espacios → ausente → default
+        ("  david-gomez  ", "david-gomez"),      # strip perimetral, contenido intacto
+        ("árbol🐉-ñ", "árbol🐉-ñ"),               # unicode libre, sin censo
+        ("a" * 128, "a" * 128),                 # techo exacto de MAX_ACTOR_LENGTH
+    ]
+
+    for actor_entrada, actor_esperado in casos:
+        arguments = {
+            "task_type": "vectorize_event",
+            "task_payload": {"content": "Despacho con actor edge."},
+            "actor": actor_entrada,
+        }
+        response = await handle_task_tool("coreai_dispatch_task", arguments)
+
+        assert response["isError"] is False, (
+            f"El actor {actor_entrada!r} NO debe rechazar el despacho: {response}"
+        )
+        content = json.loads(response["content"][0]["text"])
+        assert content["actor"] == actor_esperado, (
+            f"El actor estampado para {actor_entrada!r} debía ser {actor_esperado!r}"
+        )
+
+        await _limpiar_task_y_sesion(db_session, uuid.UUID(content["task_id"]))
+
+@pytest.mark.asyncio
+async def test_mcp_dispatch_actor_sobre_el_techo_rebota(db_session):
+    """
+    Forma del sobre: el actor SOBRE MAX_ACTOR_LENGTH rebota síncrono (fallo
+    de forma, no veneno de identidad — D4 es de la ENTIDAD). Cero filas.
+    """
+    before = await _row_counts(db_session)
+
+    arguments = {
+        "task_type": "vectorize_event",
+        "task_payload": {"content": "Despacho con actor desbordado."},
+        "actor": "a" * 129,
+    }
+    response = await handle_task_tool("coreai_dispatch_task", arguments)
+
+    assert response["isError"] is True, "El actor sobre el techo debe rebotar por forma"
+    assert "actor" in response["content"][0]["text"], "El error nombra al campo"
+
+    after = await _row_counts(db_session)
+    assert after == before, f"El rechazo mutó la BD: antes {before}, después {after}"

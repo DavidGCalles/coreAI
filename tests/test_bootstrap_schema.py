@@ -62,7 +62,10 @@ def _mock_conn(
     conn.dialect = postgresql.dialect()
 
     async def _execute(stmt, params=None, **kw):
-        sql = str(stmt)
+        # [ADR-012-001] #112: además de TextClause, el bootstrap emite INSERTs
+        # pg_insert (ON CONFLICT es específico de dialecto) — compilar con el
+        # dialecto real de la conn para inspeccionar el SQL.
+        sql = str(stmt.compile(dialect=conn.dialect)) if hasattr(stmt, "compile") else str(stmt)
         if "information_schema.columns" in sql:
             order.append("col_query")
             cols = (existing_columns or {}).get(params["t"], set())
@@ -71,13 +74,22 @@ def _mock_conn(
             order.append("index_query")
             idx = (existing_indexes or {}).get(params["t"], set())
             return [(i,) for i in idx]
+        if sql.startswith("UPDATE entities"):
+            # Reclamo de la fila system_default histórica (ADR-012-001)
+            order.append("claim_system_default")
+            return []
+        if sql.startswith("INSERT INTO entities"):
+            order.append("insert_entity")
+            return []
         if sql.startswith("ALTER TYPE"):
             order.append("alter_value")
             return []
         if sql.startswith("ALTER TABLE"):
             order.append("alter_column")
             return []
-        if sql.startswith("CREATE INDEX"):
+        if sql.startswith(("CREATE INDEX", "CREATE UNIQUE INDEX")):
+            # [ADR-012-001] #112: idx_entities_slug es el primer índice UNIQUE
+            # de la metadata — ensure_indexes lo emite como CREATE UNIQUE INDEX.
             order.append("create_index")
             return []
         order.append("enum")
@@ -223,8 +235,12 @@ async def test_ensure_indexes_esquema_completo_no_emite_ningun_create():
     assert order.count("index_query") == len(Base.metadata.sorted_tables)
 
 
-async def test_ensure_relational_schema_orden_completo(monkeypatch):
-    """enums -> create_all (misma tx) -> alter_value+commit por valor -> col_query por tabla -> index_query por tabla + create_index -> commit final."""
+async def test_ensure_relational_schema_orden_completo(monkeypatch, tmp_path):
+    """
+    enums -> create_all (misma tx) -> alter_value+commit por valor -> col_query por tabla -> index_query por tabla + create_index -> commit final -> reclamo legacy + INSERT de system_default (ADR-012-001: fichero ausente, sin declaradas).
+    """
+    # Hermetic: el YAML apunta a un fichero inexistente (determinista en cualquier máquina).
+    monkeypatch.setenv("ENTITIES_FILE", str(tmp_path / "entities_inexistente.yaml"))
     order: list = []
     conn_begin = _mock_conn(order)
     conn_alter = _mock_conn(order, existing_columns=_all_columns_by_table())
@@ -239,13 +255,17 @@ async def test_ensure_relational_schema_orden_completo(monkeypatch):
         + ["col_query"] * len(Base.metadata.sorted_tables)
         + _expected_index_tokens()
         + ["commit"]  # el commit explícito que cierra el tx de columnas + índices
+        # ADR-012-001 #112: tx propia de entidades — reclamo de la fila legacy
+        # + INSERT IF NOT EXISTS del system_default implícito (sin declaradas)
+        + ["claim_system_default", "insert_entity"]
     )
     assert order == expected
     # create_all va con checkfirst (default) sobre el metadata de los modelos
     assert conn_begin.run_sync.await_args.args[0] == Base.metadata.create_all
 
 
-async def test_ensure_relational_schema_segunda_corrida_no_cambia_el_contrato(monkeypatch):
+async def test_ensure_relational_schema_segunda_corrida_no_cambia_el_contrato(monkeypatch, tmp_path):
+    monkeypatch.setenv("ENTITIES_FILE", str(tmp_path / "entities_inexistente.yaml"))
     order: list = []
     conn_begin = _mock_conn(order)
     conn_alter = _mock_conn(order, existing_columns=_all_columns_by_table())
@@ -261,6 +281,7 @@ async def test_ensure_relational_schema_segunda_corrida_no_cambia_el_contrato(mo
         + ["col_query"] * len(Base.metadata.sorted_tables)
         + _expected_index_tokens()
         + ["commit"]  # cierra el tx de los ALTER TABLE + CREATE INDEX
+        + ["claim_system_default", "insert_entity"]  # ADR-012-001: entidades
     )
     assert order == one_run * 2
 

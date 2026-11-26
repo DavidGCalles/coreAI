@@ -28,7 +28,21 @@ class Entity(Base):
     # Flexibilidad absoluta para configuraciones del nodo (RBAC, preferencias, keys)
     metadata_payload: Mapped[dict] = mapped_column(JSON, default={})
     
+    # [ADR-012-001] #112: identidad declarativa del despliegue. El slug es el
+    # discriminador de identidad del ADR-012 (el oráculo que consumirá la
+    # frontera); nullable por la regla aditiva (las filas históricas nacieron
+    # sin él y el bootstrap solo reclama la de system_default).
+    slug: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Etiqueta de presentación, opcional (vive en el YAML del despliegue).
+    label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        # [ADR-012-001] #112: discriminador único de identidad — el INSERT del
+        # bootstrap garantiza entidades con ON CONFLICT (slug) DO NOTHING.
+        Index('idx_entities_slug', 'slug', unique=True),
+    )
 
 class Session(Base):
     __tablename__ = 'sessions'
@@ -89,6 +103,27 @@ class Task(Base):
     __tablename__ = 'tasks'
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey('sessions.id', ondelete='CASCADE'))
+
+    # Titularidad del despacho (ADR-012-002, #113): la entidad que la frontera
+    # resolvió al encolar — la DLQ de la 4.4 gana dueño sin tocar su superficie.
+    # Nullable por la regla aditiva (ADR-011): las filas históricas nacieron sin
+    # dueño y su regla de cierre (D1) vive en el #116. La FK aterriza completa
+    # en despliegues limpios (create_all); en un arranque con historia,
+    # ensure_columns añade la columna SIN la restricción — la integridad queda
+    # garantizada por construcción: la entity_id la resolvió la frontera contra
+    # el registro (ADR-012-001) o no se escribió fila alguna.
+    entity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('entities.id'), nullable=True
+    )
+
+    # Actor de trazabilidad (ADR-012-003, #114): free-string de QUIÉN despacha
+    # dentro del namespace de la entidad — el declarado o, por omisión, el
+    # slug de la entidad resuelta. Re-homed del JSONB del payload a PRIMER
+    # NIVEL relacional (ADR-012-004, #115): la identidad del sustrato no vive
+    # enterrada en una columna JSON. Nullable por la regla aditiva (ADR-011):
+    # las filas anteriores al re-home no se reescriben — el techo de 128 es
+    # el mismo que MAX_ACTOR_LENGTH de la frontera (src/schemas/tasks.py).
+    actor: Mapped[str | None] = mapped_column(String(128), nullable=True)
     
     status: Mapped[TaskStatus] = mapped_column(
         SQLEnum(

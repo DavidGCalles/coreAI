@@ -15,7 +15,8 @@ from src.mcp.tools.task_tools import get_task_tools, handle_task_tool
 from src.mcp.tools.recall_tools import get_recall_tools, handle_recall_tool
 from src.mcp.resources.contract_resources import get_contract_resources, read_contract_resource
 from src.db.bootstrap import ensure_relational_schema
-from src.db.vector_db import ensure_collections, close_qdrant_client
+from src.db.entities_config import EntitiesProvisionError
+from src.db.vector_db import ensure_collections, ensure_owners, close_qdrant_client
 from src.db.database import engine
 
 from pydantic import BaseModel, ConfigDict
@@ -209,7 +210,7 @@ def run_dual(host: str, port: int) -> None:
     threading.Thread(target=http_server.run, daemon=True, name="coreai-http").start()
     logger.info(
         "Modo dual: streamable HTTP en http://%s:%s/mcp (hilo) + STDIO en el proceso principal",
-        host, port
+        host, port,
     )
     asyncio.run(run_stdio())
 
@@ -230,14 +231,23 @@ async def bootstrap_schema_with_backoff() -> None:
             # (asyncio.run en main) y el pool global de asyncpg queda con
             # conexiones atadas a ese loop ya cerrado. Sin vaciar el pool,
             # el server reutiliza esas conexiones en su propio loop y
-            # asyncpg revienta con InterfaceError "another operation is in
-            # progress" en la primera query real (p.ej. el get-or-create
+            # asyncpg revienta con InterfaceError "another operation is
+            # in progress" en la primera query real (p.ej. el get-or-create
             # de system_default del dispatch). dispose() cierra esas
             # conexiones DENTRO de este loop, antes de que asyncio.run lo
             # cierre — el server arranca con el pool vacío.
             await engine.dispose()
             logger.info("Arranque: esquema relacional garantizado (BUG-010 #87)")
             return
+        except EntitiesProvisionError as entities_error:
+            # [ADR-012-001] #112: provisión malformada = fallo DETERMINISTA de
+            # configuración — reintentar es reintentar el mismo fichero. Sin
+            # backoff: el arranque muere aquí, explícito y con fichero y razón.
+            logger.error(
+                "Provisión declarativa de entidades inválida, arranque abortado: %s",
+                entities_error,
+            )
+            raise
         except Exception as schema_error:
             logger.error(
                 "No se pudo garantizar el esquema relacional: %s — reintento en %.1fs",
@@ -253,6 +263,11 @@ async def bootstrap_collections_with_backoff() -> None:
     Hasta ahora la garantizaba solo el worker (BUG-001 #34), así que este
     proceso asumía que el otro ya había creado las colecciones — un recall
     contra un Qdrant limpio sin worker moría con MissingCollectionError.
+
+    Junto a la topología corre el backfill de titularidad (D1 del ADR-012,
+    [ADR-012-005] #116): los puntos históricos sin owner quedan sellados a
+    `system_default` antes de servir — nadie pierde acceso al subir la
+    familia, y el filtro de owner del recall encuentra a todos los puntos.
 
     Trampa del event loop (DECISIÓN documentada, gemelo del fix del pool
     asyncpg del BUG-010): este bootstrap corre en un event loop efímero
@@ -270,6 +285,7 @@ async def bootstrap_collections_with_backoff() -> None:
     while True:
         try:
             await ensure_collections()
+            await ensure_owners()
             await close_qdrant_client()
             logger.info("Arranque: topología vectorial garantizada (BUG-011 #107)")
             return

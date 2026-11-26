@@ -18,6 +18,9 @@ Valida:
 - Punto inexistente (decisión B): MemoryPointNotFoundError — veneno
   determinista, jamás un no-op silencioso.
 - Idempotencia por diseño: re-dispatch de la misma corrección converge.
+- Traza del corrector ([ADR-012-004] #115): claves planas amend_entity +
+  amend_actor en el punto y en la task row del amend — el owner del punto
+  NO se reescribe; SET idempotente, converge sin historial creciente.
 - Extracción estricta: clave ausente = corrupción de cola (ADR-006).
 """
 
@@ -41,8 +44,12 @@ POINT_ID = uuid.UUID("7c60755c-02a3-4158-b8e4-6600b7650c17")
 # HELPERS (Datos Sintéticos)
 # =====================================================================
 
-def _amend_task(**payload_overrides):
-    """Tarea de corrección conforme al contrato: point_id + project."""
+def _amend_task(entity_id=None, actor=None, **payload_overrides):
+    """Tarea de corrección conforme al contrato: point_id + project.
+
+    entity_id/actor opcionales: las columnas de primer nivel del despacho
+    (#113/#115). Sin ellas se simula una task legada pre-familia.
+    """
     payload = {
         "task_type": TaskType.AMEND_MEMORY_POINT.value,
         "point_id": str(POINT_ID),
@@ -51,6 +58,8 @@ def _amend_task(**payload_overrides):
     payload.update(payload_overrides)
     return Task(
         id=TASK_ID,
+        entity_id=entity_id,
+        actor=actor,
         session_id=SESSION_ID,
         status=TaskStatus.RUNNING,
         payload=payload,
@@ -158,11 +167,16 @@ class TestPuntoDeTexto:
         escaneadas = [call.kwargs["collection_name"] for call in client.retrieve.call_args_list]
         assert escaneadas == ["document", "conversation"]
 
-        # 2. set_payload en Qdrant: clave plana project, sin vector (wait=True)
+        # 2. set_payload en Qdrant: clave plana project + traza del corrector
+        #    ([ADR-012-004] #115, legada sin columnas → claves None), sin vector (wait=True)
         client.set_payload.assert_awaited_once()
         kwargs = client.set_payload.call_args.kwargs
         assert kwargs["collection_name"] == "conversation"
-        assert kwargs["payload"] == {"project": "proyecto-corregido"}
+        assert kwargs["payload"] == {
+            "project": "proyecto-corregido",
+            "amend_entity": None,
+            "amend_actor": None,
+        }
         assert kwargs["points"] == [str(POINT_ID)]
         assert kwargs["wait"] is True
 
@@ -170,13 +184,61 @@ class TestPuntoDeTexto:
         #    (SELECT + UPDATE del JSONB de su task row) — cero espejo del original.
         assert session_mock.execute.await_count == 2
 
-        # 4. Traza audible: old_project y colección capturados
+        # 4. Traza audible: old_project, colección y corrector capturados
         traza = _payload_escrito_en_update(session_mock.execute.call_args_list[1])
         assert traza["amended_collection"] == "conversation"
         assert traza["old_project"] == "proyecto-viejo"
+        assert traza["amend_entity"] is None
+        assert traza["amend_actor"] is None
         assert traza["task_type"] == "amend_memory_point"
 
         # 5. Transacción limpia: el commit pertenece al ciclo del worker
+        session_mock.rollback.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @patch("src.workers.task_router.get_qdrant_client", new_callable=AsyncMock)
+    async def test_traza_del_corrector_slug_y_actor_del_despacho(self, mock_get_qdrant):
+        """
+        [ADR-012-004] #115: el amend con columna estampada deja la traza
+        del corrector — amend_entity = slug del despachante (join contra
+        entities) y amend_actor = columna actor — en el punto y en su
+        task row. El owner/titularidad del punto NO se reescribe: la
+        corrección re-orienta metadata, no re-atribuye memoria.
+        """
+        client = _qdrant_client_con_punto(
+            "conversation",
+            {"tenant_id": "99999999-9999-9999-9999-999999999999", "owner": "otra-gente", "project": "proyecto-viejo"},
+        )
+        mock_get_qdrant.return_value = client
+
+        titular = uuid.uuid4()
+        session_mock = _session_mock(
+            _payload_result("frontier-david"),  # get_slug: SELECT del slug
+            _payload_result({"task_type": "amend_memory_point", "point_id": str(POINT_ID), "project": "proyecto-corregido"}),
+            MagicMock(),                        # traza: UPDATE atómico
+        )
+
+        await handle_amend_memory_point(
+            _amend_task(entity_id=titular, actor="david-gomez"), session_mock
+        )
+
+        # 1. El punto gana la traza plana del corrector, y NO re-escribe owner
+        kwargs = client.set_payload.call_args.kwargs
+        assert kwargs["payload"] == {
+            "project": "proyecto-corregido",
+            "amend_entity": "frontier-david",
+            "amend_actor": "david-gomez",
+        }
+        assert "owner" not in kwargs["payload"]
+
+        # 2. La task row del amend espeja la misma traza
+        assert session_mock.execute.await_count == 3
+        traza = _payload_escrito_en_update(session_mock.execute.call_args_list[2])
+        assert traza["amended_collection"] == "conversation"
+        assert traza["old_project"] == "proyecto-viejo"
+        assert traza["amend_entity"] == "frontier-david"
+        assert traza["amend_actor"] == "david-gomez"
+
         session_mock.rollback.assert_not_awaited()
 
 
@@ -216,10 +278,15 @@ class TestPuntoDeImagen:
 
         await handle_amend_memory_point(_amend_task(), session_mock)
 
-        # 1. set_payload sobre la colección de imágenes
+        # 1. set_payload sobre la colección de imágenes (traza del corrector
+        #    legada: claves None sin columnas estampadas, #115)
         kwargs = client.set_payload.call_args.kwargs
         assert kwargs["collection_name"] == IMAGE_COLLECTION
-        assert kwargs["payload"] == {"project": "proyecto-corregido"}
+        assert kwargs["payload"] == {
+            "project": "proyecto-corregido",
+            "amend_entity": None,
+            "amend_actor": None,
+        }
 
         # 2. Cuatro executes: espejo (SELECT+UPDATE) + traza (SELECT+UPDATE)
         assert session_mock.execute.await_count == 4
@@ -366,10 +433,15 @@ class TestIdempotencia:
             traza = _payload_escrito_en_update(session_mock.execute.call_args_list[1])
             assert traza["old_project"] == "proyecto-corregido"  # ya convergido
 
-        # Dos sets idénticos: el payload converge, no acumula
+        # Dos sets idénticos: el payload converge, no acumula (la traza del
+        # corrector viaja en el mismo SET idempotente, #115)
         assert client.set_payload.await_count == 2
         assert all(
-            call.kwargs["payload"] == {"project": "proyecto-corregido"}
+            call.kwargs["payload"] == {
+                "project": "proyecto-corregido",
+                "amend_entity": None,
+                "amend_actor": None,
+            }
             for call in client.set_payload.call_args_list
         )
 
